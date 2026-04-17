@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:ticket_box/data/local/app_database.dart';
+import 'package:ticket_box/data/providers/database_providers.dart';
+import 'package:ticket_box/data/repositories/ticket_repository.dart';
+import 'package:ticket_box/features/reimbursements/reimbursement_providers.dart';
+import 'package:ticket_box/features/reimbursements/reimbursement_support.dart';
 import 'package:ticket_box/features/tickets/ticket_detail_page.dart';
 import 'package:ticket_box/features/tickets/ticket_form_page.dart';
 import 'package:ticket_box/features/tickets/ticket_providers.dart';
@@ -40,6 +44,9 @@ class _TicketsPageState extends ConsumerState<TicketsPage> {
     final selectedStatus = ref.watch(ticketStatusFilterProvider);
     final selectedType = ref.watch(ticketTypeFilterProvider);
     final selectedMonth = ref.watch(ticketMonthFilterProvider);
+    final sortField = ref.watch(ticketSortFieldProvider);
+    final sortDirection = ref.watch(ticketSortDirectionProvider);
+    final selectionState = ref.watch(ticketSelectionProvider);
     final hasFilters =
         selectedStatus != null || selectedType != null || selectedMonth != null;
     final hasSearchOrFilter = ref.watch(ticketHasSearchOrFilterProvider);
@@ -61,7 +68,13 @@ class _TicketsPageState extends ConsumerState<TicketsPage> {
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(20, 24, 20, 32),
         children: [
-          _HeaderCard(onAddPressed: () => _openCreatePage(context)),
+          _HeaderCard(
+            onAddPressed: () => _openCreatePage(context),
+            onSelectionModePressed: selectionState.enabled
+                ? _exitSelectionMode
+                : _enterSelectionMode,
+            isSelectionMode: selectionState.enabled,
+          ),
           const SizedBox(height: 18),
           _ArchiveSearchCard(
             controller: _searchController,
@@ -69,20 +82,15 @@ class _TicketsPageState extends ConsumerState<TicketsPage> {
             selectedStatus: selectedStatus,
             selectedType: selectedType,
             selectedMonth: selectedMonth,
+            selectedSortField: sortField,
+            selectedSortDirection: sortDirection,
             hasActiveCriteria: shouldShowResults,
-            onSearchChanged: (value) {
-              ref.read(ticketSearchQueryProvider.notifier).setQuery(value);
-            },
-            onSearchCleared: () {
-              _searchController.clear();
-              ref.read(ticketSearchQueryProvider.notifier).clear();
-            },
-            onStatusChanged: (value) {
-              ref.read(ticketStatusFilterProvider.notifier).setFilter(value);
-            },
-            onTypeChanged: (value) {
-              ref.read(ticketTypeFilterProvider.notifier).setFilter(value);
-            },
+            onSearchChanged: _updateSearchQuery,
+            onSearchCleared: _clearSearchQuery,
+            onStatusChanged: _updateStatusFilter,
+            onTypeChanged: _updateTypeFilter,
+            onSortFieldChanged: _updateSortField,
+            onSortDirectionChanged: _updateSortDirection,
             onMonthPressed: () => _pickMonth(context, ref, selectedMonth),
             onClearPressed: _clearArchiveCriteria,
           ),
@@ -98,6 +106,8 @@ class _TicketsPageState extends ConsumerState<TicketsPage> {
                 recentTicketsAsync.when(
                   data: (tickets) => _RecentTicketsSection(
                     tickets: tickets,
+                    sortField: sortField,
+                    sortDirection: sortDirection,
                     onViewAllPressed: _showAllTickets,
                     onCreatePressed: () => _openCreatePage(context),
                     onTicketPressed: (ticketId) =>
@@ -119,42 +129,104 @@ class _TicketsPageState extends ConsumerState<TicketsPage> {
           else
             ticketsAsync.when(
               data: (tickets) {
+                final children = <Widget>[
+                  if (selectionState.enabled) ...[
+                    _MultiSelectActionCard(
+                      selectedCount: selectionState.selectedCount,
+                      hasSelection: selectionState.hasSelection,
+                      onCancelPressed: _exitSelectionMode,
+                      onUpdateStatusPressed: _openBatchStatusSheet,
+                      onAddToSheetPressed: _openBatchAddSheet,
+                      onDeletePressed: _deleteSelectedTickets,
+                    ),
+                    const SizedBox(height: 18),
+                  ],
+                ];
+
                 if (tickets.isEmpty) {
-                  return _EmptyState(
-                    hasSearchOrFilter: hasSearchOrFilter,
-                    onCreatePressed: () => _openCreatePage(context),
-                    onResetPressed: _clearArchiveCriteria,
+                  children.add(
+                    _EmptyState(
+                      hasSearchOrFilter: hasSearchOrFilter,
+                      onCreatePressed: () => _openCreatePage(context),
+                      onResetPressed: _clearArchiveCriteria,
+                    ),
+                  );
+
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: children,
+                  );
+                }
+
+                children.add(
+                  _SectionHeader(
+                    count: tickets.length,
+                    searchQuery: searchQuery.trim(),
+                    hasFilters: hasFilters,
+                    isShowingAll: isShowingAll,
+                    sortField: sortField,
+                    sortDirection: sortDirection,
+                  ),
+                );
+                children.add(const SizedBox(height: 14));
+                for (final ticket in tickets) {
+                  children.add(
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 14),
+                      child: _TicketCard(
+                        ticket: ticket,
+                        isSelectionMode: selectionState.enabled,
+                        isSelected: selectionState.isSelected(ticket.id),
+                        onTap: () => selectionState.enabled
+                            ? _toggleSelection(ticket.id)
+                            : _openDetailPage(context, ticket.id),
+                      ),
+                    ),
                   );
                 }
 
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _SectionHeader(
-                      count: tickets.length,
-                      searchQuery: searchQuery.trim(),
-                      hasFilters: hasFilters,
-                      isShowingAll: isShowingAll,
-                    ),
-                    const SizedBox(height: 14),
-                    for (final ticket in tickets)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 14),
-                        child: _TicketCard(
-                          ticket: ticket,
-                          onTap: () => _openDetailPage(context, ticket.id),
-                        ),
-                      ),
-                  ],
+                  children: children,
                 );
               },
-              loading: () => const Padding(
-                padding: EdgeInsets.symmetric(vertical: 80),
-                child: Center(child: CircularProgressIndicator()),
+              loading: () => Column(
+                children: [
+                  if (selectionState.enabled) ...[
+                    _MultiSelectActionCard(
+                      selectedCount: selectionState.selectedCount,
+                      hasSelection: selectionState.hasSelection,
+                      onCancelPressed: _exitSelectionMode,
+                      onUpdateStatusPressed: _openBatchStatusSheet,
+                      onAddToSheetPressed: _openBatchAddSheet,
+                      onDeletePressed: _deleteSelectedTickets,
+                    ),
+                    const SizedBox(height: 18),
+                  ],
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 80),
+                    child: Center(child: CircularProgressIndicator()),
+                  ),
+                ],
               ),
               error: (error, stackTrace) {
-                return _ErrorState(
-                  onRetryPressed: () => ref.invalidate(ticketListProvider),
+                return Column(
+                  children: [
+                    if (selectionState.enabled) ...[
+                      _MultiSelectActionCard(
+                        selectedCount: selectionState.selectedCount,
+                        hasSelection: selectionState.hasSelection,
+                        onCancelPressed: _exitSelectionMode,
+                        onUpdateStatusPressed: _openBatchStatusSheet,
+                        onAddToSheetPressed: _openBatchAddSheet,
+                        onDeletePressed: _deleteSelectedTickets,
+                      ),
+                      const SizedBox(height: 18),
+                    ],
+                    _ErrorState(
+                      onRetryPressed: () => ref.invalidate(ticketListProvider),
+                    ),
+                  ],
                 );
               },
             ),
@@ -168,14 +240,79 @@ class _TicketsPageState extends ConsumerState<TicketsPage> {
     ref.read(ticketShowAllProvider.notifier).showAll();
   }
 
+  void _enterSelectionMode() {
+    FocusScope.of(context).unfocus();
+    ref.read(ticketShowAllProvider.notifier).showAll();
+    ref.read(ticketSelectionProvider.notifier).start();
+  }
+
+  void _exitSelectionMode() {
+    FocusScope.of(context).unfocus();
+    ref.read(ticketSelectionProvider.notifier).stop();
+  }
+
+  void _toggleSelection(int ticketId) {
+    ref.read(ticketSelectionProvider.notifier).toggle(ticketId);
+  }
+
+  void _clearSelectedForCriteriaChange() {
+    if (!ref.read(ticketSelectionProvider).enabled) {
+      return;
+    }
+
+    ref.read(ticketSelectionProvider.notifier).clearSelected();
+  }
+
+  void _updateSearchQuery(String value) {
+    _clearSelectedForCriteriaChange();
+    ref.read(ticketSearchQueryProvider.notifier).setQuery(value);
+  }
+
+  void _clearSearchQuery() {
+    _clearSelectedForCriteriaChange();
+    _searchController.clear();
+    ref.read(ticketSearchQueryProvider.notifier).clear();
+  }
+
+  void _updateStatusFilter(String? value) {
+    _clearSelectedForCriteriaChange();
+    ref.read(ticketStatusFilterProvider.notifier).setFilter(value);
+  }
+
+  void _updateTypeFilter(String? value) {
+    _clearSelectedForCriteriaChange();
+    ref.read(ticketTypeFilterProvider.notifier).setFilter(value);
+  }
+
+  void _updateSortField(TicketSortField? value) {
+    if (value == null) {
+      return;
+    }
+
+    _clearSelectedForCriteriaChange();
+    ref.read(ticketSortFieldProvider.notifier).setField(value);
+  }
+
+  void _updateSortDirection(TicketSortDirection? value) {
+    if (value == null) {
+      return;
+    }
+
+    _clearSelectedForCriteriaChange();
+    ref.read(ticketSortDirectionProvider.notifier).setDirection(value);
+  }
+
   void _clearArchiveCriteria() {
     FocusScope.of(context).unfocus();
     _searchController.clear();
+    _clearSelectedForCriteriaChange();
     ref.read(ticketSearchQueryProvider.notifier).clear();
     ref.read(ticketStatusFilterProvider.notifier).setFilter(null);
     ref.read(ticketTypeFilterProvider.notifier).setFilter(null);
     ref.read(ticketMonthFilterProvider.notifier).setFilter(null);
-    ref.read(ticketShowAllProvider.notifier).hide();
+    if (!ref.read(ticketSelectionProvider).enabled) {
+      ref.read(ticketShowAllProvider.notifier).hide();
+    }
   }
 
   Future<void> _openCreatePage(BuildContext context) async {
@@ -212,16 +349,222 @@ class _TicketsPageState extends ConsumerState<TicketsPage> {
       return;
     }
 
+    _clearSelectedForCriteriaChange();
     ref
         .read(ticketMonthFilterProvider.notifier)
         .setFilter(normalizeTicketMonth(pickedDate));
   }
+
+  Future<void> _openBatchAddSheet() async {
+    final selectedIds = ref.read(ticketSelectionProvider).selectedIds;
+    if (selectedIds.isEmpty) {
+      return;
+    }
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) {
+        return _BatchAttachSheet(
+          selectedCount: selectedIds.length,
+          onSheetSelected: (sheet) => _attachSelectedTickets(sheet),
+        );
+      },
+    );
+  }
+
+  Future<void> _openBatchStatusSheet() async {
+    final selectedIds = ref.read(ticketSelectionProvider).selectedIds;
+    if (selectedIds.isEmpty) {
+      return;
+    }
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) {
+        return _BatchStatusSheet(
+          selectedCount: selectedIds.length,
+          onStatusSelected: (status) => _updateSelectedTicketStatus(status),
+        );
+      },
+    );
+  }
+
+  Future<void> _attachSelectedTickets(ReimbursementSheet sheet) async {
+    final selectedIds = ref.read(ticketSelectionProvider).selectedIds.toList();
+    if (selectedIds.isEmpty) {
+      return;
+    }
+
+    try {
+      final selectedTickets = await ref
+          .read(ticketRepositoryProvider)
+          .getTicketsByIds(selectedIds);
+      final affectedSheetIds = {
+        sheet.id,
+        ...selectedTickets.map((ticket) => ticket.reimbursementSheetId),
+      }.whereType<int>().toSet();
+
+      await ref
+          .read(reimbursementRepositoryProvider)
+          .attachTicketsToReimbursementSheet(
+            ticketIds: selectedIds,
+            reimbursementSheetId: sheet.id,
+          );
+
+      ref.invalidate(ticketListProvider);
+      ref.invalidate(ticketRecentListProvider);
+      ref.invalidate(reimbursementAvailableTicketsProvider);
+      for (final sheetId in affectedSheetIds) {
+        ref.invalidate(reimbursementLinkedTicketsProvider(sheetId));
+      }
+      ref.read(ticketSelectionProvider.notifier).clearSelected();
+
+      if (!mounted) {
+        return;
+      }
+
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已将 ${selectedIds.length} 张票据加入报销单')),
+      );
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('加入报销单失败，请稍后重试')));
+    }
+  }
+
+  Future<void> _updateSelectedTicketStatus(String status) async {
+    final selectedIds = ref.read(ticketSelectionProvider).selectedIds.toList();
+    if (selectedIds.isEmpty) {
+      return;
+    }
+
+    try {
+      await ref
+          .read(ticketRepositoryProvider)
+          .updateTicketStatuses(ticketIds: selectedIds, status: status);
+
+      ref.invalidate(ticketListProvider);
+      ref.invalidate(ticketRecentListProvider);
+      for (final ticketId in selectedIds) {
+        ref.invalidate(ticketByIdProvider(ticketId));
+      }
+      ref.read(ticketSelectionProvider.notifier).clearSelected();
+
+      if (!mounted) {
+        return;
+      }
+
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '已将 ${selectedIds.length} 张票据改为${ticketStatusLabel(status)}',
+          ),
+        ),
+      );
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('批量修改状态失败，请稍后重试')));
+    }
+  }
+
+  Future<void> _deleteSelectedTickets() async {
+    final selectedIds = ref.read(ticketSelectionProvider).selectedIds.toList();
+    if (selectedIds.isEmpty) {
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('批量删除票据'),
+          content: Text('已选 ${selectedIds.length} 张票据，删除后本地附件也会一起移除。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('删除'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    try {
+      final selectedTickets = await ref
+          .read(ticketRepositoryProvider)
+          .getTicketsByIds(selectedIds);
+      await ref.read(ticketRepositoryProvider).deleteTickets(selectedIds);
+
+      final fileService = ref.read(ticketFileServiceProvider);
+      for (final ticket in selectedTickets) {
+        await fileService.deleteStoredFile(ticket.filePath);
+      }
+
+      ref.invalidate(ticketListProvider);
+      ref.invalidate(ticketRecentListProvider);
+      ref.invalidate(reimbursementAvailableTicketsProvider);
+      for (final sheetId
+          in selectedTickets
+              .map((ticket) => ticket.reimbursementSheetId)
+              .whereType<int>()
+              .toSet()) {
+        ref.invalidate(reimbursementLinkedTicketsProvider(sheetId));
+      }
+      ref.read(ticketSelectionProvider.notifier).clearSelected();
+
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('已删除 ${selectedIds.length} 张票据')));
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('批量删除失败，请稍后重试')));
+    }
+  }
 }
 
 class _HeaderCard extends StatelessWidget {
-  const _HeaderCard({required this.onAddPressed});
+  const _HeaderCard({
+    required this.onAddPressed,
+    required this.onSelectionModePressed,
+    required this.isSelectionMode,
+  });
 
   final VoidCallback onAddPressed;
+  final VoidCallback onSelectionModePressed;
+  final bool isSelectionMode;
 
   @override
   Widget build(BuildContext context) {
@@ -242,18 +585,34 @@ class _HeaderCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 12),
-              _PageIconBadge(icon: Icons.inventory_2_rounded),
+              const _PageIconBadge(icon: Icons.inventory_2_rounded),
             ],
           ),
           const SizedBox(height: 18),
-          FilledButton.icon(
-            onPressed: onAddPressed,
-            icon: const Icon(Icons.add),
-            label: const Text('新增票据'),
+          Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            children: [
+              FilledButton.icon(
+                onPressed: onAddPressed,
+                icon: const Icon(Icons.add),
+                label: const Text('新增票据'),
+              ),
+              OutlinedButton.icon(
+                key: const ValueKey('ticket-multi-select-button'),
+                onPressed: onSelectionModePressed,
+                icon: Icon(
+                  isSelectionMode
+                      ? Icons.close_rounded
+                      : Icons.checklist_rounded,
+                ),
+                label: Text(isSelectionMode ? '取消选择' : '批量选择'),
+              ),
+            ],
           ),
           const SizedBox(height: 10),
           Text(
-            '所有票据都归档在这里，先找，再看。',
+            '所有票据都归档在这里，先找，再批量处理。',
             style: Theme.of(
               context,
             ).textTheme.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
@@ -271,11 +630,15 @@ class _ArchiveSearchCard extends StatelessWidget {
     required this.selectedStatus,
     required this.selectedType,
     required this.selectedMonth,
+    required this.selectedSortField,
+    required this.selectedSortDirection,
     required this.hasActiveCriteria,
     required this.onSearchChanged,
     required this.onSearchCleared,
     required this.onStatusChanged,
     required this.onTypeChanged,
+    required this.onSortFieldChanged,
+    required this.onSortDirectionChanged,
     required this.onMonthPressed,
     required this.onClearPressed,
   });
@@ -285,11 +648,15 @@ class _ArchiveSearchCard extends StatelessWidget {
   final String? selectedStatus;
   final String? selectedType;
   final DateTime? selectedMonth;
+  final TicketSortField selectedSortField;
+  final TicketSortDirection selectedSortDirection;
   final bool hasActiveCriteria;
   final ValueChanged<String> onSearchChanged;
   final VoidCallback onSearchCleared;
   final ValueChanged<String?> onStatusChanged;
   final ValueChanged<String?> onTypeChanged;
+  final ValueChanged<TicketSortField?> onSortFieldChanged;
+  final ValueChanged<TicketSortDirection?> onSortDirectionChanged;
   final VoidCallback onMonthPressed;
   final VoidCallback onClearPressed;
 
@@ -395,6 +762,57 @@ class _ArchiveSearchCard extends StatelessWidget {
                   : '月份：${formatTicketMonth(selectedMonth!)}',
             ),
           ),
+          const SizedBox(height: 12),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final compact = constraints.maxWidth < 520;
+              final sortFieldInput = DropdownButtonFormField<TicketSortField>(
+                key: const ValueKey('ticket-sort-field-input'),
+                initialValue: selectedSortField,
+                decoration: const InputDecoration(labelText: '排序方式'),
+                items: [
+                  for (final option in ticketSortFieldOptions)
+                    DropdownMenuItem<TicketSortField>(
+                      value: option.value,
+                      child: Text(option.label),
+                    ),
+                ],
+                onChanged: onSortFieldChanged,
+              );
+              final sortDirectionInput =
+                  DropdownButtonFormField<TicketSortDirection>(
+                    key: const ValueKey('ticket-sort-direction-input'),
+                    initialValue: selectedSortDirection,
+                    decoration: const InputDecoration(labelText: '排序方向'),
+                    items: [
+                      for (final option in ticketSortDirectionOptions)
+                        DropdownMenuItem<TicketSortDirection>(
+                          value: option.value,
+                          child: Text(option.label),
+                        ),
+                    ],
+                    onChanged: onSortDirectionChanged,
+                  );
+
+              if (compact) {
+                return Column(
+                  children: [
+                    sortFieldInput,
+                    const SizedBox(height: 12),
+                    sortDirectionInput,
+                  ],
+                );
+              }
+
+              return Row(
+                children: [
+                  Expanded(child: sortFieldInput),
+                  const SizedBox(width: 12),
+                  Expanded(child: sortDirectionInput),
+                ],
+              );
+            },
+          ),
         ],
       ),
     );
@@ -443,12 +861,16 @@ class _ArchiveGuidanceState extends StatelessWidget {
 class _RecentTicketsSection extends StatelessWidget {
   const _RecentTicketsSection({
     required this.tickets,
+    required this.sortField,
+    required this.sortDirection,
     required this.onViewAllPressed,
     required this.onCreatePressed,
     required this.onTicketPressed,
   });
 
   final List<Ticket> tickets;
+  final TicketSortField sortField;
+  final TicketSortDirection sortDirection;
   final VoidCallback onViewAllPressed;
   final VoidCallback onCreatePressed;
   final ValueChanged<int> onTicketPressed;
@@ -463,12 +885,16 @@ class _RecentTicketsSection extends StatelessWidget {
       );
     }
 
+    final defaultSort = isDefaultTicketSort(sortField, sortDirection);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         AppSectionHeader(
-          title: '最近 3 张票据',
-          subtitle: '默认仅显示最近票据。',
+          title: defaultSort ? '最近 3 张票据' : '当前排序前 3 张票据',
+          subtitle: defaultSort
+              ? '默认仅显示最近票据。'
+              : '已按${ticketSortFieldLabel(sortField)} · ${ticketSortDirectionLabel(sortDirection)}',
           trailing: TextButton(
             key: const ValueKey('ticket-view-all-button'),
             onPressed: onViewAllPressed,
@@ -481,10 +907,81 @@ class _RecentTicketsSection extends StatelessWidget {
             padding: const EdgeInsets.only(bottom: 14),
             child: _TicketCard(
               ticket: ticket,
+              isSelectionMode: false,
+              isSelected: false,
               onTap: () => onTicketPressed(ticket.id),
             ),
           ),
       ],
+    );
+  }
+}
+
+class _MultiSelectActionCard extends StatelessWidget {
+  const _MultiSelectActionCard({
+    required this.selectedCount,
+    required this.hasSelection,
+    required this.onCancelPressed,
+    required this.onUpdateStatusPressed,
+    required this.onAddToSheetPressed,
+    required this.onDeletePressed,
+  });
+
+  final int selectedCount;
+  final bool hasSelection;
+  final VoidCallback onCancelPressed;
+  final Future<void> Function() onUpdateStatusPressed;
+  final Future<void> Function() onAddToSheetPressed;
+  final Future<void> Function() onDeletePressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+
+    return AppSurfaceCard(
+      color: colors.primaryContainer.withValues(alpha: 0.38),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          AppSectionHeader(
+            title: '已选 $selectedCount 张票据',
+            subtitle: '可批量修改状态、加入报销单或删除',
+            trailing: TextButton(
+              onPressed: onCancelPressed,
+              child: const Text('取消选择'),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            children: [
+              FilledButton.tonalIcon(
+                key: const ValueKey('ticket-batch-status-button'),
+                onPressed: hasSelection ? onUpdateStatusPressed : null,
+                icon: const Icon(Icons.sync_alt_rounded),
+                label: const Text('批量修改状态'),
+              ),
+              FilledButton.icon(
+                key: const ValueKey('ticket-batch-add-button'),
+                onPressed: hasSelection ? onAddToSheetPressed : null,
+                icon: const Icon(Icons.link_rounded),
+                label: const Text('加入报销单'),
+              ),
+              OutlinedButton.icon(
+                key: const ValueKey('ticket-batch-delete-button'),
+                onPressed: hasSelection ? onDeletePressed : null,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: colors.error,
+                  side: BorderSide(color: colors.error.withValues(alpha: 0.25)),
+                ),
+                icon: const Icon(Icons.delete_outline),
+                label: const Text('删除'),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
@@ -495,12 +992,16 @@ class _SectionHeader extends StatelessWidget {
     required this.searchQuery,
     required this.hasFilters,
     required this.isShowingAll,
+    required this.sortField,
+    required this.sortDirection,
   });
 
   final int count;
   final String searchQuery;
   final bool hasFilters;
   final bool isShowingAll;
+  final TicketSortField sortField;
+  final TicketSortDirection sortDirection;
 
   @override
   Widget build(BuildContext context) {
@@ -522,6 +1023,9 @@ class _SectionHeader extends StatelessWidget {
     if (isShowingAll) {
       parts.add('全部归档');
     }
+    parts.add(
+      '排序：${ticketSortFieldLabel(sortField)} · ${ticketSortDirectionLabel(sortDirection)}',
+    );
 
     if (parts.isEmpty) {
       return null;
@@ -532,9 +1036,16 @@ class _SectionHeader extends StatelessWidget {
 }
 
 class _TicketCard extends StatelessWidget {
-  const _TicketCard({required this.ticket, required this.onTap});
+  const _TicketCard({
+    required this.ticket,
+    required this.isSelectionMode,
+    required this.isSelected,
+    required this.onTap,
+  });
 
   final Ticket ticket;
+  final bool isSelectionMode;
+  final bool isSelected;
   final VoidCallback onTap;
 
   @override
@@ -548,13 +1059,19 @@ class _TicketCard extends StatelessWidget {
     return Material(
       color: Colors.transparent,
       child: InkWell(
+        key: ValueKey('ticket-card-${ticket.id}'),
         borderRadius: BorderRadius.circular(28),
         onTap: onTap,
         child: Ink(
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: isSelected
+                ? colors.primaryContainer.withValues(alpha: 0.5)
+                : Colors.white,
             borderRadius: BorderRadius.circular(28),
-            border: Border.all(color: colors.outlineVariant),
+            border: Border.all(
+              color: isSelected ? colors.primary : colors.outlineVariant,
+              width: isSelected ? 1.4 : 1,
+            ),
             boxShadow: const [
               BoxShadow(
                 color: Color(0x0D0B1F33),
@@ -579,7 +1096,9 @@ class _TicketCard extends StatelessWidget {
                         borderRadius: BorderRadius.circular(16),
                       ),
                       child: Icon(
-                        Icons.receipt_long_rounded,
+                        isSelectionMode && isSelected
+                            ? Icons.check_circle_rounded
+                            : Icons.receipt_long_rounded,
                         size: 20,
                         color: colors.primary,
                       ),
@@ -621,8 +1140,14 @@ class _TicketCard extends StatelessWidget {
                         ),
                         const SizedBox(height: 6),
                         Icon(
-                          Icons.chevron_right_rounded,
-                          color: colors.onSurfaceVariant,
+                          isSelectionMode
+                              ? (isSelected
+                                    ? Icons.check_circle_rounded
+                                    : Icons.radio_button_unchecked_rounded)
+                              : Icons.chevron_right_rounded,
+                          color: isSelectionMode && isSelected
+                              ? colors.primary
+                              : colors.onSurfaceVariant,
                         ),
                       ],
                     ),
@@ -749,6 +1274,271 @@ class _ErrorState extends StatelessWidget {
           const SizedBox(height: 16),
           FilledButton(onPressed: onRetryPressed, child: const Text('重新加载')),
         ],
+      ),
+    );
+  }
+}
+
+class _BatchStatusSheet extends StatelessWidget {
+  const _BatchStatusSheet({
+    required this.selectedCount,
+    required this.onStatusSelected,
+  });
+
+  final int selectedCount;
+  final Future<void> Function(String status) onStatusSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: SizedBox(
+        height: MediaQuery.of(context).size.height * 0.56,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              AppSectionHeader(
+                title: '批量修改状态',
+                subtitle: '已选 $selectedCount 张票据',
+              ),
+              const SizedBox(height: 16),
+              Expanded(
+                child: ListView.builder(
+                  itemCount: ticketStatusOptions.length,
+                  itemBuilder: (context, index) {
+                    final option = ticketStatusOptions[index];
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: _TicketStatusOptionCard(
+                        option: option,
+                        onTap: () => onStatusSelected(option.value),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TicketStatusOptionCard extends StatelessWidget {
+  const _TicketStatusOptionCard({required this.option, required this.onTap});
+
+  final TicketSelectOption option;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(22),
+        onTap: onTap,
+        child: Ink(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: colors.surfaceContainerLowest,
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: colors.outlineVariant),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: colors.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Icon(Icons.flag_outlined, color: colors.primary),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  option.label,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              FilledButton(onPressed: onTap, child: const Text('应用')),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _BatchAttachSheet extends ConsumerWidget {
+  const _BatchAttachSheet({
+    required this.selectedCount,
+    required this.onSheetSelected,
+  });
+
+  final int selectedCount;
+  final Future<void> Function(ReimbursementSheet sheet) onSheetSelected;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final sheetsAsync = ref.watch(reimbursementListProvider);
+
+    return SafeArea(
+      child: SizedBox(
+        height: MediaQuery.of(context).size.height * 0.72,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+          child: sheetsAsync.when(
+            data: (sheets) {
+              if (sheets.isEmpty) {
+                return Center(
+                  child: AppSurfaceCard(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.account_balance_wallet_outlined,
+                          size: 40,
+                        ),
+                        const SizedBox(height: 12),
+                        const Text('还没有报销单'),
+                        const SizedBox(height: 8),
+                        const Text('请先新增报销单。', textAlign: TextAlign.center),
+                        const SizedBox(height: 16),
+                        FilledButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          child: const Text('知道了'),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }
+
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  AppSectionHeader(
+                    title: '加入报销单',
+                    subtitle: '已选 $selectedCount 张票据',
+                  ),
+                  const SizedBox(height: 16),
+                  Expanded(
+                    child: ListView.builder(
+                      itemCount: sheets.length,
+                      itemBuilder: (context, index) {
+                        final sheet = sheets[index];
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: _ReimbursementOptionCard(
+                            sheet: sheet,
+                            onTap: () => onSheetSelected(sheet),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              );
+            },
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (error, stackTrace) {
+              return Center(
+                child: AppSurfaceCard(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('加载报销单失败'),
+                      const SizedBox(height: 12),
+                      FilledButton(
+                        onPressed: () =>
+                            ref.invalidate(reimbursementListProvider),
+                        child: const Text('重新加载'),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ReimbursementOptionCard extends StatelessWidget {
+  const _ReimbursementOptionCard({required this.sheet, required this.onTap});
+
+  final ReimbursementSheet sheet;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final description = (sheet.description ?? '').trim();
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(22),
+        onTap: onTap,
+        child: Ink(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: colors.surfaceContainerLowest,
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: colors.outlineVariant),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      sheet.title,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        Chip(
+                          label: Text(reimbursementStatusLabel(sheet.status)),
+                        ),
+                      ],
+                    ),
+                    if (description.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        description,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: colors.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              FilledButton(onPressed: onTap, child: const Text('加入')),
+            ],
+          ),
+        ),
       ),
     );
   }

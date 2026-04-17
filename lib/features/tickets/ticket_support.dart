@@ -1,4 +1,5 @@
 import 'package:path/path.dart' as path;
+import 'package:ticket_box/data/repositories/ticket_repository.dart';
 
 class TicketSelectOption {
   const TicketSelectOption({required this.value, required this.label});
@@ -21,12 +22,62 @@ const ticketStatusOptions = <TicketSelectOption>[
   TicketSelectOption(value: 'reimbursed', label: '已报销'),
 ];
 
+class TicketSortFieldOption {
+  const TicketSortFieldOption({required this.value, required this.label});
+
+  final TicketSortField value;
+  final String label;
+}
+
+class TicketSortDirectionOption {
+  const TicketSortDirectionOption({required this.value, required this.label});
+
+  final TicketSortDirection value;
+  final String label;
+}
+
+const ticketSortFieldOptions = <TicketSortFieldOption>[
+  TicketSortFieldOption(value: TicketSortField.date, label: '按日期'),
+  TicketSortFieldOption(value: TicketSortField.amount, label: '按金额'),
+  TicketSortFieldOption(value: TicketSortField.updatedAt, label: '按最近更新'),
+];
+
+const ticketSortDirectionOptions = <TicketSortDirectionOption>[
+  TicketSortDirectionOption(value: TicketSortDirection.ascending, label: '升序'),
+  TicketSortDirectionOption(value: TicketSortDirection.descending, label: '降序'),
+];
+
 String ticketTypeLabel(String value) {
   return _labelFor(value, ticketTypeOptions);
 }
 
 String ticketStatusLabel(String value) {
   return _labelFor(value, ticketStatusOptions);
+}
+
+String ticketSortFieldLabel(TicketSortField value) {
+  switch (value) {
+    case TicketSortField.date:
+      return '按日期';
+    case TicketSortField.amount:
+      return '按金额';
+    case TicketSortField.updatedAt:
+      return '按最近更新';
+  }
+}
+
+String ticketSortDirectionLabel(TicketSortDirection value) {
+  switch (value) {
+    case TicketSortDirection.ascending:
+      return '升序';
+    case TicketSortDirection.descending:
+      return '降序';
+  }
+}
+
+bool isDefaultTicketSort(TicketSortField field, TicketSortDirection direction) {
+  return field == TicketSortField.date &&
+      direction == TicketSortDirection.descending;
 }
 
 String ticketFileTypeLabel(String? value) {

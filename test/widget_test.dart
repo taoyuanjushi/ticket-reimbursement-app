@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:ticket_box/app/app.dart';
 import 'package:ticket_box/data/local/app_database.dart';
 import 'package:ticket_box/data/providers/database_providers.dart';
+import 'package:ticket_box/features/home/home_page.dart';
 import 'package:ticket_box/data/repositories/reimbursement_repository.dart';
 import 'package:ticket_box/data/repositories/ticket_repository.dart';
 import 'package:ticket_box/features/reimbursements/reimbursement_detail_page.dart';
@@ -33,7 +34,120 @@ Finder _settingsScrollable() {
       .first;
 }
 
+Finder _ticketsScrollable() {
+  return find
+      .descendant(
+        of: find.byKey(const ValueKey('tickets-page')),
+        matching: find.byType(Scrollable),
+      )
+      .first;
+}
+
+Finder _homeScrollable() {
+  return find
+      .descendant(
+        of: find.byKey(const ValueKey('home-page-content')),
+        matching: find.byType(Scrollable),
+      )
+      .first;
+}
+
 void main() {
+  testWidgets('home page shows workbench summary and recent items', (
+    WidgetTester tester,
+  ) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+
+    final ticketRepository = TicketRepository(database);
+    final reimbursementRepository = ReimbursementRepository(database);
+
+    await ticketRepository.createTicket(
+      TicketsCompanion.insert(
+        title: '打车票据',
+        amountInCents: 4200,
+        occurredOn: DateTime(2026, 4, 16),
+        type: 'transport',
+        status: 'pending',
+      ),
+    );
+    await ticketRepository.createTicket(
+      TicketsCompanion.insert(
+        title: '午餐票据',
+        amountInCents: 3600,
+        occurredOn: DateTime(2026, 4, 15),
+        type: 'meal',
+        status: 'submitted',
+      ),
+    );
+    await ticketRepository.createTicket(
+      TicketsCompanion.insert(
+        title: '办公票据',
+        amountInCents: 9800,
+        occurredOn: DateTime(2026, 4, 14),
+        type: 'office',
+        status: 'pending',
+      ),
+    );
+
+    await reimbursementRepository.createReimbursementSheet(
+      ReimbursementSheetsCompanion.insert(
+        title: '四月差旅报销',
+        status: const Value('draft'),
+      ),
+    );
+    await reimbursementRepository.createReimbursementSheet(
+      ReimbursementSheetsCompanion.insert(
+        title: '项目采购报销',
+        status: const Value('submitted'),
+      ),
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [appDatabaseProvider.overrideWithValue(database)],
+        child: const MaterialApp(home: Scaffold(body: HomePage())),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('新增票据'), findsOneWidget);
+    expect(find.text('新建报销单'), findsOneWidget);
+    expect(find.text('工作概览'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('home-summary-total-tickets')),
+        matching: find.text('3'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('home-summary-pending-tickets')),
+        matching: find.text('2'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('home-summary-reimbursement-sheets')),
+        matching: find.text('2'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('最近票据'), findsOneWidget);
+    expect(find.text('打车票据'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('最近报销单'),
+      300,
+      scrollable: _homeScrollable(),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('最近报销单'), findsOneWidget);
+    expect(find.text('项目采购报销'), findsOneWidget);
+    expect(find.text('四月差旅报销'), findsOneWidget);
+  });
+
   testWidgets('bottom navigation switches between main sections', (
     WidgetTester tester,
   ) async {
@@ -208,6 +322,327 @@ void main() {
       expect(find.text('第四张票据'), findsOneWidget);
     },
   );
+
+  testWidgets('tickets page supports batch add to reimbursement sheets', (
+    WidgetTester tester,
+  ) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+
+    final ticketRepository = TicketRepository(database);
+    final reimbursementRepository = ReimbursementRepository(database);
+    final sheetId = await reimbursementRepository.createReimbursementSheet(
+      ReimbursementSheetsCompanion.insert(
+        title: '四月批量报销',
+        status: const Value('draft'),
+      ),
+    );
+    final firstTicketId = await ticketRepository.createTicket(
+      TicketsCompanion.insert(
+        title: '打车票',
+        amountInCents: 4800,
+        occurredOn: DateTime(2026, 4, 15),
+        type: 'transport',
+        status: 'pending',
+      ),
+    );
+    final secondTicketId = await ticketRepository.createTicket(
+      TicketsCompanion.insert(
+        title: '午餐票',
+        amountInCents: 3600,
+        occurredOn: DateTime(2026, 4, 16),
+        type: 'meal',
+        status: 'pending',
+      ),
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [appDatabaseProvider.overrideWithValue(database)],
+        child: const MaterialApp(home: Scaffold(body: TicketsPage())),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(TicketsPage)),
+    );
+    container.read(ticketShowAllProvider.notifier).showAll();
+    container.read(ticketSelectionProvider.notifier).start();
+    await container.read(ticketListProvider.future);
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('已选 0 张票据'),
+      300,
+      scrollable: _ticketsScrollable(),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('已选 0 张票据'), findsOneWidget);
+    expect(find.text('加入报销单'), findsOneWidget);
+    expect(find.text('删除'), findsOneWidget);
+    expect(find.text('全部票据 2 张'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.byKey(ValueKey('ticket-card-$firstTicketId')),
+      300,
+      scrollable: _ticketsScrollable(),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(ValueKey('ticket-card-$firstTicketId')));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.byKey(ValueKey('ticket-card-$secondTicketId')),
+      300,
+      scrollable: _ticketsScrollable(),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(ValueKey('ticket-card-$secondTicketId')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('已选 2 张票据'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('ticket-batch-add-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('四月批量报销').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('已选 0 张票据'), findsOneWidget);
+    expect(
+      (await reimbursementRepository.listLinkedTickets(
+        sheetId,
+      )).map((ticket) => ticket.title),
+      ['午餐票', '打车票'],
+    );
+  });
+
+  testWidgets('tickets page supports batch delete', (
+    WidgetTester tester,
+  ) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+
+    final ticketRepository = TicketRepository(database);
+    final deleteTicketId = await ticketRepository.createTicket(
+      TicketsCompanion.insert(
+        title: '待删票据',
+        amountInCents: 5200,
+        occurredOn: DateTime(2026, 4, 15),
+        type: 'office',
+        status: 'pending',
+      ),
+    );
+    await ticketRepository.createTicket(
+      TicketsCompanion.insert(
+        title: '保留票据',
+        amountInCents: 6200,
+        occurredOn: DateTime(2026, 4, 16),
+        type: 'office',
+        status: 'pending',
+      ),
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [appDatabaseProvider.overrideWithValue(database)],
+        child: const MaterialApp(home: Scaffold(body: TicketsPage())),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(TicketsPage)),
+    );
+    container.read(ticketShowAllProvider.notifier).showAll();
+    container.read(ticketSelectionProvider.notifier).start();
+    await container.read(ticketListProvider.future);
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.byKey(ValueKey('ticket-card-$deleteTicketId')),
+      300,
+      scrollable: _ticketsScrollable(),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(ValueKey('ticket-card-$deleteTicketId')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('已选 1 张票据'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('ticket-batch-delete-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('删除').last);
+    await tester.pumpAndSettle();
+
+    expect(
+      (await ticketRepository.listTickets()).map((ticket) => ticket.title),
+      ['保留票据'],
+    );
+    expect(find.text('待删票据'), findsNothing);
+    expect(find.text('保留票据'), findsOneWidget);
+    expect(find.text('已选 0 张票据'), findsOneWidget);
+  });
+
+  testWidgets('tickets page supports batch status update', (
+    WidgetTester tester,
+  ) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+
+    final ticketRepository = TicketRepository(database);
+    final firstTicketId = await ticketRepository.createTicket(
+      TicketsCompanion.insert(
+        title: '状态票据 A',
+        amountInCents: 2000,
+        occurredOn: DateTime(2026, 4, 15),
+        type: 'transport',
+        status: 'pending',
+      ),
+    );
+    final secondTicketId = await ticketRepository.createTicket(
+      TicketsCompanion.insert(
+        title: '状态票据 B',
+        amountInCents: 2400,
+        occurredOn: DateTime(2026, 4, 16),
+        type: 'meal',
+        status: 'pending',
+      ),
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [appDatabaseProvider.overrideWithValue(database)],
+        child: const MaterialApp(home: Scaffold(body: TicketsPage())),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(TicketsPage)),
+    );
+    container.read(ticketShowAllProvider.notifier).showAll();
+    container.read(ticketSelectionProvider.notifier).start();
+    await container.read(ticketListProvider.future);
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.byKey(ValueKey('ticket-card-$firstTicketId')),
+      300,
+      scrollable: _ticketsScrollable(),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(ValueKey('ticket-card-$firstTicketId')));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.byKey(ValueKey('ticket-card-$secondTicketId')),
+      300,
+      scrollable: _ticketsScrollable(),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(ValueKey('ticket-card-$secondTicketId')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('已选 2 张票据'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('ticket-batch-status-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('已提交').first);
+    await tester.pumpAndSettle();
+
+    final tickets = await ticketRepository.getTicketsByIds([
+      firstTicketId,
+      secondTicketId,
+    ]);
+    expect(tickets.map((ticket) => ticket.status), ['submitted', 'submitted']);
+    expect(find.text('已选 0 张票据'), findsOneWidget);
+  });
+
+  testWidgets('tickets page supports sorting results by amount', (
+    WidgetTester tester,
+  ) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+
+    final ticketRepository = TicketRepository(database);
+    await ticketRepository.createTicket(
+      TicketsCompanion.insert(
+        title: '高金额票',
+        amountInCents: 9600,
+        occurredOn: DateTime(2026, 4, 15),
+        type: 'office',
+        status: 'submitted',
+      ),
+    );
+    await ticketRepository.createTicket(
+      TicketsCompanion.insert(
+        title: '低金额票',
+        amountInCents: 1800,
+        occurredOn: DateTime(2026, 4, 16),
+        type: 'office',
+        status: 'submitted',
+      ),
+    );
+    await ticketRepository.createTicket(
+      TicketsCompanion.insert(
+        title: '中金额票',
+        amountInCents: 4200,
+        occurredOn: DateTime(2026, 4, 17),
+        type: 'office',
+        status: 'submitted',
+      ),
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [appDatabaseProvider.overrideWithValue(database)],
+        child: const MaterialApp(home: Scaffold(body: TicketsPage())),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(TicketsPage)),
+    );
+
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('ticket-view-all-button')),
+      300,
+      scrollable: _ticketsScrollable(),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('ticket-view-all-button')));
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('ticket-sort-field-input')),
+      -300,
+      scrollable: _ticketsScrollable(),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('ticket-sort-field-input')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('按金额').last);
+    await container.read(ticketListProvider.future);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('ticket-sort-direction-input')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('升序').last);
+    await container.read(ticketListProvider.future);
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('低金额票'),
+      300,
+      scrollable: _ticketsScrollable(),
+    );
+    await tester.pumpAndSettle();
+
+    final lowY = tester.getTopLeft(find.text('低金额票')).dy;
+    final middleY = tester.getTopLeft(find.text('中金额票')).dy;
+    final highY = tester.getTopLeft(find.text('高金额票')).dy;
+
+    expect(lowY, lessThan(middleY));
+    expect(middleY, lessThan(highY));
+    expect(find.textContaining('排序：按金额 · 升序'), findsOneWidget);
+  });
 
   testWidgets('ticket detail page shows reminder action', (
     WidgetTester tester,

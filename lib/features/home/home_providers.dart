@@ -1,21 +1,47 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:ticket_box/data/local/app_database.dart';
+import 'package:ticket_box/data/providers/database_providers.dart';
 
-class HomeStat {
-  const HomeStat({required this.label, required this.value});
+class HomeWorkbenchData {
+  const HomeWorkbenchData({
+    required this.ticketCount,
+    required this.pendingTicketCount,
+    required this.reimbursementSheetCount,
+    required this.recentTickets,
+    required this.recentReimbursementSheets,
+  });
 
-  final String label;
-  final String value;
+  final int ticketCount;
+  final int pendingTicketCount;
+  final int reimbursementSheetCount;
+  final List<Ticket> recentTickets;
+  final List<ReimbursementSheet> recentReimbursementSheets;
 }
 
-final homeStatsProvider = Provider<List<HomeStat>>(
-  (ref) => const [
-    HomeStat(label: '存储方式', value: '本地'),
-    HomeStat(label: '附件支持', value: '图片/PDF'),
-    HomeStat(label: '导出格式', value: 'CSV'),
-    HomeStat(label: '提醒方式', value: '手动'),
-  ],
-);
+final homeWorkbenchProvider = FutureProvider.autoDispose<HomeWorkbenchData>((
+  ref,
+) async {
+  final ticketRepository = ref.watch(ticketRepositoryProvider);
+  final reimbursementRepository = ref.watch(reimbursementRepositoryProvider);
 
-final homeNextStepsProvider = Provider<List<String>>(
-  (ref) => const ['录入票据，可附图片或 PDF。', '新建报销单，关联相关票据。', '按需导出 CSV 或创建提醒。'],
-);
+  final ticketsFuture = ticketRepository.listTickets();
+  final pendingTicketsFuture = ticketRepository.filterTickets(
+    status: 'pending',
+  );
+  final reimbursementSheetsFuture = reimbursementRepository
+      .listReimbursementSheets();
+
+  final tickets = await ticketsFuture;
+  final pendingTickets = await pendingTicketsFuture;
+  final reimbursementSheets = await reimbursementSheetsFuture;
+
+  return HomeWorkbenchData(
+    ticketCount: tickets.length,
+    pendingTicketCount: pendingTickets.length,
+    reimbursementSheetCount: reimbursementSheets.length,
+    recentTickets: tickets.take(3).toList(growable: false),
+    recentReimbursementSheets: reimbursementSheets
+        .take(3)
+        .toList(growable: false),
+  );
+});

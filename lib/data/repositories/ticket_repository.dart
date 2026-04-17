@@ -1,6 +1,10 @@
 import 'package:drift/drift.dart';
 import 'package:ticket_box/data/local/app_database.dart';
 
+enum TicketSortField { date, amount, updatedAt }
+
+enum TicketSortDirection { ascending, descending }
+
 class TicketRepository {
   TicketRepository(this.database);
 
@@ -28,8 +32,24 @@ class TicketRepository {
     )..where((ticket) => ticket.id.equals(id))).getSingleOrNull();
   }
 
-  Future<List<Ticket>> listTickets() {
-    return _orderedTicketQuery().get();
+  Future<List<Ticket>> listTickets({
+    TicketSortField sortField = TicketSortField.date,
+    TicketSortDirection sortDirection = TicketSortDirection.descending,
+  }) {
+    return _orderedTicketQuery(
+      sortField: sortField,
+      sortDirection: sortDirection,
+    ).get();
+  }
+
+  Future<List<Ticket>> getTicketsByIds(List<int> ids) {
+    if (ids.isEmpty) {
+      return Future.value(const []);
+    }
+
+    final query = _orderedTicketQuery();
+    query.where((ticket) => ticket.id.isIn(ids));
+    return query.get();
   }
 
   Future<List<Ticket>> listTicketsWithAttachments() {
@@ -43,8 +63,13 @@ class TicketRepository {
     String? type,
     DateTime? month,
     String? keyword,
+    TicketSortField sortField = TicketSortField.date,
+    TicketSortDirection sortDirection = TicketSortDirection.descending,
   }) {
-    final statement = _orderedTicketQuery();
+    final statement = _orderedTicketQuery(
+      sortField: sortField,
+      sortDirection: sortDirection,
+    );
 
     if (status != null && status.isNotEmpty) {
       statement.where((ticket) => ticket.status.equals(status));
@@ -97,16 +122,90 @@ class TicketRepository {
     );
   }
 
-  SimpleSelectStatement<Tickets, Ticket> _orderedTicketQuery() {
+  Future<int> updateTicketStatuses({
+    required List<int> ticketIds,
+    required String status,
+  }) {
+    if (ticketIds.isEmpty) {
+      return Future.value(0);
+    }
+
+    return (database.update(
+      database.tickets,
+    )..where((ticket) => ticket.id.isIn(ticketIds))).write(
+      TicketsCompanion(status: Value(status), updatedAt: Value(DateTime.now())),
+    );
+  }
+
+  Future<int> deleteTickets(List<int> ids) {
+    if (ids.isEmpty) {
+      return Future.value(0);
+    }
+
+    return (database.delete(
+      database.tickets,
+    )..where((ticket) => ticket.id.isIn(ids))).go();
+  }
+
+  SimpleSelectStatement<Tickets, Ticket> _orderedTicketQuery({
+    TicketSortField sortField = TicketSortField.date,
+    TicketSortDirection sortDirection = TicketSortDirection.descending,
+  }) {
     final query = database.select(database.tickets);
 
-    query.orderBy([
-      (ticket) =>
-          OrderingTerm(expression: ticket.occurredOn, mode: OrderingMode.desc),
-      (ticket) =>
-          OrderingTerm(expression: ticket.createdAt, mode: OrderingMode.desc),
-    ]);
+    query.orderBy(_buildOrdering(sortField, sortDirection));
 
     return query;
+  }
+
+  List<OrderingTerm Function(Tickets)> _buildOrdering(
+    TicketSortField sortField,
+    TicketSortDirection sortDirection,
+  ) {
+    final primaryMode = sortDirection == TicketSortDirection.ascending
+        ? OrderingMode.asc
+        : OrderingMode.desc;
+
+    switch (sortField) {
+      case TicketSortField.date:
+        return [
+          (ticket) =>
+              OrderingTerm(expression: ticket.occurredOn, mode: primaryMode),
+          (ticket) => OrderingTerm(
+            expression: ticket.updatedAt,
+            mode: OrderingMode.desc,
+          ),
+          (ticket) => OrderingTerm(
+            expression: ticket.createdAt,
+            mode: OrderingMode.desc,
+          ),
+        ];
+      case TicketSortField.amount:
+        return [
+          (ticket) =>
+              OrderingTerm(expression: ticket.amountInCents, mode: primaryMode),
+          (ticket) => OrderingTerm(
+            expression: ticket.occurredOn,
+            mode: OrderingMode.desc,
+          ),
+          (ticket) => OrderingTerm(
+            expression: ticket.createdAt,
+            mode: OrderingMode.desc,
+          ),
+        ];
+      case TicketSortField.updatedAt:
+        return [
+          (ticket) =>
+              OrderingTerm(expression: ticket.updatedAt, mode: primaryMode),
+          (ticket) => OrderingTerm(
+            expression: ticket.occurredOn,
+            mode: OrderingMode.desc,
+          ),
+          (ticket) => OrderingTerm(
+            expression: ticket.createdAt,
+            mode: OrderingMode.desc,
+          ),
+        ];
+    }
   }
 }

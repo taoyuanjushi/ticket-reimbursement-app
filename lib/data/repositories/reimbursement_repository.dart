@@ -79,6 +79,24 @@ class ReimbursementRepository {
     );
   }
 
+  Future<int> attachTicketsToReimbursementSheet({
+    required List<int> ticketIds,
+    required int reimbursementSheetId,
+  }) {
+    if (ticketIds.isEmpty) {
+      return Future.value(0);
+    }
+
+    return (database.update(
+      database.tickets,
+    )..where((ticket) => ticket.id.isIn(ticketIds))).write(
+      TicketsCompanion(
+        reimbursementSheetId: Value(reimbursementSheetId),
+        updatedAt: Value(DateTime.now()),
+      ),
+    );
+  }
+
   Future<int> removeTicketFromReimbursementSheet({required int ticketId}) {
     return (database.update(
       database.tickets,
