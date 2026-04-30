@@ -3,6 +3,8 @@ import 'package:ticket_box/data/local/app_database.dart';
 import 'package:ticket_box/data/providers/database_providers.dart';
 import 'package:ticket_box/data/repositories/ticket_repository.dart';
 import 'package:ticket_box/features/tickets/ticket_file_service.dart';
+import 'package:ticket_box/features/tickets/ticket_ocr_parse_service.dart';
+import 'package:ticket_box/features/tickets/ticket_ocr_service.dart';
 
 final ticketStatusFilterProvider =
     NotifierProvider<TicketStatusFilterNotifier, String?>(
@@ -18,6 +20,10 @@ final ticketMonthFilterProvider =
     NotifierProvider<TicketMonthFilterNotifier, DateTime?>(
       TicketMonthFilterNotifier.new,
     );
+
+final ticketTagFilterProvider = NotifierProvider<TicketTagFilterNotifier, int?>(
+  TicketTagFilterNotifier.new,
+);
 
 final ticketSearchQueryProvider =
     NotifierProvider<TicketSearchQueryNotifier, String>(
@@ -48,8 +54,13 @@ final ticketHasSearchOrFilterProvider = Provider<bool>((ref) {
   final status = ref.watch(ticketStatusFilterProvider);
   final type = ref.watch(ticketTypeFilterProvider);
   final month = ref.watch(ticketMonthFilterProvider);
+  final tagId = ref.watch(ticketTagFilterProvider);
 
-  return query.isNotEmpty || status != null || type != null || month != null;
+  return query.isNotEmpty ||
+      status != null ||
+      type != null ||
+      month != null ||
+      tagId != null;
 });
 
 final ticketArchiveResultsVisibleProvider = Provider<bool>((ref) {
@@ -69,12 +80,17 @@ final ticketRecentListProvider = FutureProvider<List<Ticket>>((ref) async {
   return tickets.take(3).toList(growable: false);
 });
 
+final trashedTicketListProvider = FutureProvider<List<Ticket>>((ref) {
+  return ref.watch(ticketRepositoryProvider).listTrashedTickets();
+});
+
 final ticketListProvider = FutureProvider<List<Ticket>>((ref) {
   final repository = ref.watch(ticketRepositoryProvider);
   final query = ref.watch(ticketSearchQueryProvider).trim();
   final status = ref.watch(ticketStatusFilterProvider);
   final type = ref.watch(ticketTypeFilterProvider);
   final month = ref.watch(ticketMonthFilterProvider);
+  final tagId = ref.watch(ticketTagFilterProvider);
   final sortField = ref.watch(ticketSortFieldProvider);
   final sortDirection = ref.watch(ticketSortDirectionProvider);
   final shouldShowResults = ref.watch(ticketArchiveResultsVisibleProvider);
@@ -87,6 +103,7 @@ final ticketListProvider = FutureProvider<List<Ticket>>((ref) {
     status: status,
     type: type,
     month: month,
+    tagId: tagId,
     keyword: query.isEmpty ? null : query,
     sortField: sortField,
     sortDirection: sortDirection,
@@ -99,6 +116,14 @@ final ticketByIdProvider = FutureProvider.family<Ticket?, int>((ref, id) {
 
 final ticketFileServiceProvider = Provider<TicketFileService>((ref) {
   return TicketFileService();
+});
+
+final ticketOcrServiceProvider = Provider<TicketOcrService>((ref) {
+  return const PlatformTicketOcrService();
+});
+
+final ticketOcrParseServiceProvider = Provider<TicketOcrParseService>((ref) {
+  return const SimpleTicketOcrParseService();
 });
 
 class TicketStatusFilterNotifier extends Notifier<String?> {
@@ -124,6 +149,15 @@ class TicketMonthFilterNotifier extends Notifier<DateTime?> {
   DateTime? build() => null;
 
   void setFilter(DateTime? value) {
+    state = value;
+  }
+}
+
+class TicketTagFilterNotifier extends Notifier<int?> {
+  @override
+  int? build() => null;
+
+  void setFilter(int? value) {
     state = value;
   }
 }

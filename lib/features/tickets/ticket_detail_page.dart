@@ -7,6 +7,7 @@ import 'package:ticket_box/data/providers/database_providers.dart';
 import 'package:ticket_box/features/reminders/reminder_providers.dart';
 import 'package:ticket_box/features/reminders/reminder_support.dart';
 import 'package:ticket_box/features/reimbursements/reimbursement_providers.dart';
+import 'package:ticket_box/features/tags/tag_providers.dart';
 import 'package:ticket_box/features/tickets/ticket_file_preview_page.dart';
 import 'package:ticket_box/features/tickets/ticket_form_page.dart';
 import 'package:ticket_box/features/tickets/ticket_providers.dart';
@@ -22,6 +23,7 @@ class TicketDetailPage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final ticketAsync = ref.watch(ticketByIdProvider(ticketId));
+    final ticketTagsAsync = ref.watch(ticketTagsProvider(ticketId));
 
     return Scaffold(
       appBar: AppBar(title: const Text('票据详情')),
@@ -47,6 +49,11 @@ class TicketDetailPage extends ConsumerWidget {
                 ),
                 const SizedBox(height: 16),
                 _TicketInfoCard(ticket: ticket),
+                const SizedBox(height: 16),
+                _TicketTagsCard(
+                  tagsAsync: ticketTagsAsync,
+                  onRetry: () => ref.invalidate(ticketTagsProvider(ticketId)),
+                ),
                 const SizedBox(height: 16),
                 _TicketAttachmentCard(
                   ticket: ticket,
@@ -192,7 +199,7 @@ class TicketDetailPage extends ConsumerWidget {
       builder: (dialogContext) {
         return AlertDialog(
           title: const Text('删除票据'),
-          content: const Text('删除后票据和本地附件会一起移除。'),
+          content: const Text('票据会移入回收站，附件文件不会立即删除。'),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(false),
@@ -200,7 +207,7 @@ class TicketDetailPage extends ConsumerWidget {
             ),
             FilledButton(
               onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('删除'),
+              child: const Text('移入回收站'),
             ),
           ],
         );
@@ -213,16 +220,14 @@ class TicketDetailPage extends ConsumerWidget {
 
     final navigator = Navigator.of(context);
     final messenger = ScaffoldMessenger.of(context);
-    final fileService = ref.read(ticketFileServiceProvider);
     try {
       await ref.read(ticketRepositoryProvider).deleteTicket(ticket.id);
-      await fileService.deleteStoredFile(ticket.filePath);
     } catch (_) {
       if (!context.mounted) {
         return;
       }
 
-      messenger.showSnackBar(const SnackBar(content: Text('删除失败，请稍后重试')));
+      messenger.showSnackBar(const SnackBar(content: Text('移入回收站失败，请稍后重试')));
       return;
     }
 
@@ -237,7 +242,7 @@ class TicketDetailPage extends ConsumerWidget {
     }
 
     navigator.pop();
-    messenger.showSnackBar(const SnackBar(content: Text('票据已删除')));
+    messenger.showSnackBar(const SnackBar(content: Text('票据已移入回收站')));
   }
 }
 
@@ -376,6 +381,71 @@ class _TicketInfoCard extends StatelessWidget {
           _InfoRow(label: '类型', value: ticketTypeLabel(ticket.type)),
           _InfoRow(label: '状态', value: ticketStatusLabel(ticket.status)),
           _InfoRow(label: '备注', value: ticket.note ?? '未填写', isLast: true),
+        ],
+      ),
+    );
+  }
+}
+
+class _TicketTagsCard extends StatelessWidget {
+  const _TicketTagsCard({required this.tagsAsync, required this.onRetry});
+
+  final AsyncValue<List<Tag>> tagsAsync;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+
+    return AppSurfaceCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const AppSectionHeader(title: '标签', subtitle: '用标签整理这张票据'),
+          const SizedBox(height: 18),
+          tagsAsync.when(
+            data: (tags) {
+              if (tags.isEmpty) {
+                return Text(
+                  '未添加标签',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: colors.onSurfaceVariant,
+                  ),
+                );
+              }
+
+              return Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final tag in tags)
+                    Chip(
+                      label: Text(tag.name),
+                      avatar: const Icon(Icons.label_outline_rounded, size: 18),
+                    ),
+                ],
+              );
+            },
+            loading: () => const Padding(
+              padding: EdgeInsets.symmetric(vertical: 12),
+              child: Center(child: CircularProgressIndicator()),
+            ),
+            error: (error, stackTrace) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '加载标签失败',
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodyMedium?.copyWith(color: colors.error),
+                  ),
+                  const SizedBox(height: 12),
+                  OutlinedButton(onPressed: onRetry, child: const Text('重新加载')),
+                ],
+              );
+            },
+          ),
         ],
       ),
     );

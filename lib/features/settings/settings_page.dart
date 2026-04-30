@@ -1,9 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:ticket_box/data/local/app_database.dart';
+import 'package:ticket_box/data/providers/database_providers.dart';
+import 'package:ticket_box/features/inspections/duplicate_ticket_inspection_page.dart';
+import 'package:ticket_box/features/inspections/reimbursement_completeness_inspection_page.dart';
+import 'package:ticket_box/features/inspections/ticket_completeness_inspection_page.dart';
 import 'package:ticket_box/features/reminders/reminder_providers.dart';
 import 'package:ticket_box/features/reminders/reminder_support.dart';
+import 'package:ticket_box/features/reimbursements/reimbursement_providers.dart';
 import 'package:ticket_box/features/settings/local_maintenance_providers.dart';
+import 'package:ticket_box/features/settings/local_backup_export_service.dart';
+import 'package:ticket_box/features/settings/local_backup_restore_service.dart';
 import 'package:ticket_box/features/settings/local_maintenance_service.dart';
+import 'package:ticket_box/features/settings/ticket_recycle_bin_page.dart';
+import 'package:ticket_box/features/tags/tag_management_page.dart';
+import 'package:ticket_box/features/tickets/ticket_providers.dart';
 import 'package:ticket_box/shared/widgets/app_section_header.dart';
 import 'package:ticket_box/shared/widgets/app_surface_card.dart';
 
@@ -15,6 +27,8 @@ class SettingsPage extends ConsumerWidget {
     final colors = Theme.of(context).colorScheme;
     final settingsAsync = ref.watch(reminderSettingsProvider);
     final maintenanceInfoAsync = ref.watch(localMaintenanceInfoProvider);
+    final trashedTicketsAsync = ref.watch(trashedTicketListProvider);
+    final trashedSheetsAsync = ref.watch(trashedReimbursementSheetListProvider);
 
     return ListView(
       key: const ValueKey('settings-page-content'),
@@ -70,6 +84,95 @@ class SettingsPage extends ConsumerWidget {
           ),
         ),
         const SizedBox(height: 24),
+        const AppSectionHeader(title: '标签管理', subtitle: '创建、编辑和整理票据标签'),
+        const SizedBox(height: 12),
+        AppSurfaceCard(
+          child: ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: colors.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Icon(Icons.label_outline_rounded, color: colors.primary),
+            ),
+            title: const Text('管理本地标签'),
+            subtitle: const Text('在票据表单里可多选标签'),
+            trailing: const Icon(Icons.chevron_right_rounded),
+            onTap: () => _openTagManagement(context),
+          ),
+        ),
+        const SizedBox(height: 24),
+        const AppSectionHeader(title: '安全删除', subtitle: '恢复误删票据或报销单，永久删除前会确认'),
+        const SizedBox(height: 12),
+        _RecycleBinSummaryCard(
+          trashedTicketsAsync: trashedTicketsAsync,
+          trashedSheetsAsync: trashedSheetsAsync,
+          onTap: () => _openTicketRecycleBin(context),
+          colors: colors,
+        ),
+        const SizedBox(height: 24),
+        const AppSectionHeader(title: '资料检查', subtitle: '导出前先看看可能的数据问题'),
+        const SizedBox(height: 12),
+        AppSurfaceCard(
+          child: ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: colors.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Icon(Icons.fact_check_outlined, color: colors.primary),
+            ),
+            title: const Text('检查可能重复票据'),
+            subtitle: const Text('按日期、金额和标题相似度分组'),
+            trailing: const Icon(Icons.chevron_right_rounded),
+            onTap: () => _openDuplicateTicketInspection(context),
+          ),
+        ),
+        const SizedBox(height: 12),
+        AppSurfaceCard(
+          child: ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: colors.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Icon(Icons.rule_folder_outlined, color: colors.primary),
+            ),
+            title: const Text('检查票据信息完整性'),
+            subtitle: const Text('查看空标题、缺金额和附件问题'),
+            trailing: const Icon(Icons.chevron_right_rounded),
+            onTap: () => _openTicketCompletenessInspection(context),
+          ),
+        ),
+        const SizedBox(height: 12),
+        AppSurfaceCard(
+          child: ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: colors.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Icon(Icons.inventory_2_outlined, color: colors.primary),
+            ),
+            title: const Text('检查报销单完整性'),
+            subtitle: const Text('查看空报销单、附件和票据问题'),
+            trailing: const Icon(Icons.chevron_right_rounded),
+            onTap: () => _openReimbursementCompletenessInspection(context),
+          ),
+        ),
+        const SizedBox(height: 24),
         const AppSectionHeader(title: '本地维护', subtitle: '查看路径信息和执行维护操作'),
         const SizedBox(height: 12),
         maintenanceInfoAsync.when(
@@ -78,6 +181,8 @@ class SettingsPage extends ConsumerWidget {
               _LocalMaintenanceOverviewCard(info: info),
               const SizedBox(height: 12),
               _LocalMaintenanceActionsCard(
+                onExportBackup: () => _exportLocalBackup(context, ref),
+                onRestoreBackup: () => _restoreLocalBackup(context, ref),
                 onClearExports: () => _clearExportedCsvFiles(context, ref),
                 onClearInvalidAttachments: () =>
                     _clearInvalidAttachmentReferences(context, ref),
@@ -94,6 +199,44 @@ class SettingsPage extends ConsumerWidget {
           ),
         ),
       ],
+    );
+  }
+
+  Future<void> _openTagManagement(BuildContext context) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(builder: (_) => const TagManagementPage()),
+    );
+  }
+
+  Future<void> _openTicketRecycleBin(BuildContext context) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(builder: (_) => const TicketRecycleBinPage()),
+    );
+  }
+
+  Future<void> _openDuplicateTicketInspection(BuildContext context) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => const DuplicateTicketInspectionPage(),
+      ),
+    );
+  }
+
+  Future<void> _openTicketCompletenessInspection(BuildContext context) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => const TicketCompletenessInspectionPage(),
+      ),
+    );
+  }
+
+  Future<void> _openReimbursementCompletenessInspection(
+    BuildContext context,
+  ) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => const ReimbursementCompletenessInspectionPage(),
+      ),
     );
   }
 
@@ -203,6 +346,232 @@ class SettingsPage extends ConsumerWidget {
         context,
       ).showSnackBar(const SnackBar(content: Text('清理导出文件失败')));
     }
+  }
+
+  Future<void> _exportLocalBackup(BuildContext context, WidgetRef ref) async {
+    try {
+      final result = await ref
+          .read(localBackupExportServiceProvider)
+          .exportBackup();
+
+      if (!context.mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('本地备份已导出')));
+
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) {
+          return AlertDialog(
+            title: const Text('备份导出成功'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  result.attachmentFileCount > 0
+                      ? '已打包数据库和 ${result.attachmentFileCount} 个附件文件。'
+                      : '已打包数据库，当前没有附件文件。',
+                ),
+                const SizedBox(height: 12),
+                const Text('文件路径'),
+                const SizedBox(height: 8),
+                SelectableText(result.filePath),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('关闭'),
+              ),
+              FilledButton.icon(
+                onPressed: () => _shareBackup(
+                  pageContext: context,
+                  dialogContext: dialogContext,
+                  result: result,
+                ),
+                icon: const Icon(Icons.share_outlined),
+                label: const Text('分享文件'),
+              ),
+            ],
+          );
+        },
+      );
+    } catch (_) {
+      if (!context.mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('导出本地备份失败')));
+    }
+  }
+
+  Future<void> _shareBackup({
+    required BuildContext pageContext,
+    required BuildContext dialogContext,
+    required LocalBackupExportResult result,
+  }) async {
+    try {
+      await SharePlus.instance.share(
+        ShareParams(
+          files: [XFile(result.filePath)],
+          subject: '票据盒本地备份',
+          text: '备份文件：${result.fileName}',
+        ),
+      );
+
+      if (dialogContext.mounted) {
+        Navigator.of(dialogContext).pop();
+      }
+    } catch (_) {
+      if (!pageContext.mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(
+        pageContext,
+      ).showSnackBar(const SnackBar(content: Text('分享备份文件失败')));
+    }
+  }
+
+  Future<void> _restoreLocalBackup(BuildContext context, WidgetRef ref) async {
+    final restoreService = ref.read(localBackupRestoreServiceProvider);
+    final backupFilePath = await restoreService.pickBackupFilePath();
+    if (backupFilePath == null) {
+      return;
+    }
+
+    LocalBackupInspectionResult inspection;
+    try {
+      inspection = await restoreService.inspectBackup(backupFilePath);
+    } on LocalBackupValidationException catch (error) {
+      if (!context.mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
+      return;
+    } catch (_) {
+      if (!context.mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('读取本地备份失败')));
+      return;
+    }
+
+    if (!context.mounted) {
+      return;
+    }
+
+    final confirmed = await _confirmRestoreBackup(context, inspection);
+    if (confirmed != true) {
+      return;
+    }
+
+    var didCloseDatabase = false;
+
+    try {
+      await ref.read(appDatabaseProvider).close();
+      didCloseDatabase = true;
+
+      final result = await restoreService.restoreBackup(backupFilePath);
+      _refreshAfterBackupRestore(ref);
+
+      if (!context.mounted) {
+        return;
+      }
+
+      final message = result.attachmentFileCount > 0
+          ? '本地备份已恢复，附件 ${result.attachmentFileCount} 个'
+          : '本地备份已恢复';
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    } on LocalBackupValidationException catch (error) {
+      if (didCloseDatabase) {
+        _refreshAfterBackupRestore(ref);
+      }
+
+      if (!context.mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
+    } catch (_) {
+      if (didCloseDatabase) {
+        _refreshAfterBackupRestore(ref);
+      }
+
+      if (!context.mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('恢复本地备份失败')));
+    }
+  }
+
+  Future<bool?> _confirmRestoreBackup(
+    BuildContext context,
+    LocalBackupInspectionResult inspection,
+  ) {
+    return showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('恢复本地备份'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('将恢复备份：${inspection.fileName}'),
+              const SizedBox(height: 12),
+              Text(
+                inspection.attachmentFileCount > 0
+                    ? '将覆盖当前设备上的全部本地数据和 ${inspection.attachmentFileCount} 个附件文件，且无法撤销。'
+                    : '将覆盖当前设备上的全部本地数据，且无法撤销。',
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('确认恢复'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _refreshAfterBackupRestore(WidgetRef ref) {
+    ref.invalidate(appDatabaseProvider);
+    ref.invalidate(ticketRepositoryProvider);
+    ref.invalidate(reimbursementRepositoryProvider);
+    ref.invalidate(reminderSettingsRepositoryProvider);
+    ref.invalidate(reminderSettingsProvider);
+    ref.invalidate(localMaintenanceInfoProvider);
+    ref.invalidate(ticketListProvider);
+    ref.invalidate(ticketRecentListProvider);
+    ref.invalidate(reimbursementListProvider);
+    ref.invalidate(reimbursementAvailableTicketsProvider);
   }
 
   Future<void> _clearInvalidAttachmentReferences(
@@ -328,6 +697,125 @@ class _ReminderSettingsCard extends StatelessWidget {
   }
 }
 
+class _RecycleBinSummaryCard extends StatelessWidget {
+  const _RecycleBinSummaryCard({
+    required this.trashedTicketsAsync,
+    required this.trashedSheetsAsync,
+    required this.onTap,
+    required this.colors,
+  });
+
+  final AsyncValue<List<Ticket>> trashedTicketsAsync;
+  final AsyncValue<List<ReimbursementSheet>> trashedSheetsAsync;
+  final VoidCallback onTap;
+  final ColorScheme colors;
+
+  @override
+  Widget build(BuildContext context) {
+    return AppSurfaceCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: colors.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Icon(Icons.delete_outline_rounded, color: colors.primary),
+            ),
+            title: const Text('回收站'),
+            subtitle: const Text('回收站中的内容可以恢复，永久删除后无法恢复'),
+            trailing: const Icon(Icons.chevron_right_rounded),
+            onTap: onTap,
+          ),
+          const Divider(height: 24),
+          Row(
+            children: [
+              Expanded(
+                child: _RecycleBinCountItem(
+                  label: '已删除票据数量',
+                  value: _formatCount(trashedTicketsAsync),
+                  valueKey: 'settings-recycle-bin-ticket-count',
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _RecycleBinCountItem(
+                  label: '已删除报销单数量',
+                  value: _formatCount(trashedSheetsAsync),
+                  valueKey: 'settings-recycle-bin-sheet-count',
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatCount<T>(AsyncValue<List<T>> asyncValue) {
+    if (asyncValue.hasError) {
+      return '加载失败';
+    }
+
+    final items = asyncValue.whenOrNull(data: (items) => items);
+    if (items == null) {
+      return '读取中';
+    }
+
+    return '${items.length}';
+  }
+}
+
+class _RecycleBinCountItem extends StatelessWidget {
+  const _RecycleBinCountItem({
+    required this.label,
+    required this.value,
+    required this.valueKey,
+  });
+
+  final String label;
+  final String value;
+  final String valueKey;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: colors.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: colors.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: colors.onSurfaceVariant),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            value,
+            key: ValueKey(valueKey),
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _LocalMaintenanceOverviewCard extends StatelessWidget {
   const _LocalMaintenanceOverviewCard({required this.info});
 
@@ -378,11 +866,15 @@ class _LocalMaintenanceOverviewCard extends StatelessWidget {
 
 class _LocalMaintenanceActionsCard extends StatelessWidget {
   const _LocalMaintenanceActionsCard({
+    required this.onExportBackup,
+    required this.onRestoreBackup,
     required this.onClearExports,
     required this.onClearInvalidAttachments,
     required this.onCancelNotifications,
   });
 
+  final Future<void> Function() onExportBackup;
+  final Future<void> Function() onRestoreBackup;
   final Future<void> Function() onClearExports;
   final Future<void> Function() onClearInvalidAttachments;
   final Future<void> Function() onCancelNotifications;
@@ -395,6 +887,18 @@ class _LocalMaintenanceActionsCard extends StatelessWidget {
         children: [
           const AppSectionHeader(title: '维护操作', subtitle: '按需执行本地清理和通知处理'),
           const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: onExportBackup,
+            icon: const Icon(Icons.backup_outlined),
+            label: const Text('导出本地备份'),
+          ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            onPressed: onRestoreBackup,
+            icon: const Icon(Icons.restore_page_outlined),
+            label: const Text('恢复本地备份'),
+          ),
+          const SizedBox(height: 12),
           FilledButton.tonalIcon(
             onPressed: onClearExports,
             icon: const Icon(Icons.delete_sweep_outlined),

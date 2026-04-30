@@ -1,8 +1,9 @@
-import 'package:drift/drift.dart';
+import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ticket_box/data/local/app_database.dart';
 import 'package:ticket_box/data/repositories/reimbursement_repository.dart';
+import 'package:ticket_box/data/repositories/tag_repository.dart';
 import 'package:ticket_box/data/repositories/ticket_repository.dart';
 
 void main() {
@@ -101,6 +102,69 @@ void main() {
     );
 
     expect(results.map((item) => item.title), ['四月午餐']);
+  });
+
+  test('tag filter works together with search and other filters', () async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+
+    final ticketRepository = TicketRepository(database);
+    final tagRepository = TagRepository(database);
+    final travelTagId = await tagRepository.createTag('差旅');
+    final officeTagId = await tagRepository.createTag('办公');
+    final travelTicketId = await ticketRepository.createTicket(
+      TicketsCompanion.insert(
+        title: '高铁票',
+        amountInCents: 18800,
+        occurredOn: DateTime(2026, 4, 18),
+        type: 'transport',
+        status: 'submitted',
+        note: const Value('项目出差'),
+      ),
+    );
+    final otherTravelTicketId = await ticketRepository.createTicket(
+      TicketsCompanion.insert(
+        title: '酒店票',
+        amountInCents: 32800,
+        occurredOn: DateTime(2026, 4, 19),
+        type: 'travel',
+        status: 'submitted',
+        note: const Value('项目出差'),
+      ),
+    );
+    final officeTicketId = await ticketRepository.createTicket(
+      TicketsCompanion.insert(
+        title: '显示器',
+        amountInCents: 259900,
+        occurredOn: DateTime(2026, 4, 20),
+        type: 'office',
+        status: 'submitted',
+        note: const Value('项目采购'),
+      ),
+    );
+
+    await tagRepository.replaceTagsForTicket(
+      ticketId: travelTicketId,
+      tagIds: [travelTagId],
+    );
+    await tagRepository.replaceTagsForTicket(
+      ticketId: otherTravelTicketId,
+      tagIds: [travelTagId],
+    );
+    await tagRepository.replaceTagsForTicket(
+      ticketId: officeTicketId,
+      tagIds: [officeTagId],
+    );
+
+    final results = await ticketRepository.filterTickets(
+      keyword: '项目',
+      status: 'submitted',
+      type: 'transport',
+      month: DateTime(2026, 4),
+      tagId: travelTagId,
+    );
+
+    expect(results.map((item) => item.title), ['高铁票']);
   });
 
   test('sorting works with list queries and filtered results', () async {
@@ -276,4 +340,111 @@ void main() {
       ]);
     },
   );
+
+  test(
+    'soft delete moves tickets to recycle bin and supports restore',
+    () async {
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+
+      final repository = TicketRepository(database);
+      final ticketId = await repository.createTicket(
+        TicketsCompanion.insert(
+          title: '可恢复票据',
+          amountInCents: 4200,
+          occurredOn: DateTime(2026, 4, 20),
+          type: 'meal',
+          status: 'pending',
+        ),
+      );
+
+      await repository.moveTicketToTrash(ticketId);
+
+      expect(await repository.getTicketById(ticketId), isNull);
+      expect(await repository.listTickets(), isEmpty);
+
+      final trashedTickets = await repository.listTrashedTickets();
+      expect(trashedTickets.single.id, ticketId);
+      expect(trashedTickets.single.deletedAt, isNotNull);
+
+      await repository.restoreTicket(ticketId);
+
+      expect((await repository.listTrashedTickets()), isEmpty);
+      expect((await repository.listTickets()).single.id, ticketId);
+    },
+  );
+
+  test('permanent delete removes trashed ticket and tag links', () async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+
+    final ticketRepository = TicketRepository(database);
+    final tagRepository = TagRepository(database);
+    final tagId = await tagRepository.createTag('待清理');
+    final ticketId = await ticketRepository.createTicket(
+      TicketsCompanion.insert(
+        title: '永久删除票据',
+        amountInCents: 5200,
+        occurredOn: DateTime(2026, 4, 21),
+        type: 'office',
+        status: 'pending',
+      ),
+    );
+    await tagRepository.replaceTagsForTicket(
+      ticketId: ticketId,
+      tagIds: [tagId],
+    );
+
+    await ticketRepository.moveTicketToTrash(ticketId);
+    await ticketRepository.permanentlyDeleteTicket(ticketId);
+
+    expect(
+      await ticketRepository.getTicketById(ticketId, includeTrashed: true),
+      isNull,
+    );
+    expect(await tagRepository.listTagIdsForTicket(ticketId), isEmpty);
+  });
+
+  test('reimbursement ticket lists exclude recycled tickets', () async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+
+    final ticketRepository = TicketRepository(database);
+    final reimbursementRepository = ReimbursementRepository(database);
+    final sheetId = await reimbursementRepository.createReimbursementSheet(
+      ReimbursementSheetsCompanion.insert(
+        title: '四月报销单',
+        status: const Value('draft'),
+      ),
+    );
+    final ticketId = await ticketRepository.createTicket(
+      TicketsCompanion.insert(
+        title: '关联票据',
+        amountInCents: 6600,
+        occurredOn: DateTime(2026, 4, 22),
+        type: 'transport',
+        status: 'pending',
+      ),
+    );
+    await reimbursementRepository.attachTicketToReimbursementSheet(
+      ticketId: ticketId,
+      reimbursementSheetId: sheetId,
+    );
+
+    expect(
+      (await reimbursementRepository.listLinkedTickets(sheetId)),
+      hasLength(1),
+    );
+
+    await ticketRepository.moveTicketToTrash(ticketId);
+
+    expect(await reimbursementRepository.listLinkedTickets(sheetId), isEmpty);
+
+    await ticketRepository.restoreTicket(ticketId);
+
+    expect(
+      (await reimbursementRepository.listLinkedTickets(sheetId)),
+      hasLength(1),
+    );
+  });
 }

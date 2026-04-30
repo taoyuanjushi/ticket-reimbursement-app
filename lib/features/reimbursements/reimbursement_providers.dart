@@ -2,12 +2,20 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:ticket_box/data/local/app_database.dart';
 import 'package:ticket_box/data/providers/database_providers.dart';
 import 'package:ticket_box/features/reimbursements/reimbursement_csv_export_service.dart';
+import 'package:ticket_box/features/reimbursements/reimbursement_package_export_service.dart';
 
 final reimbursementListProvider = FutureProvider<List<ReimbursementSheet>>((
   ref,
 ) {
   return ref.watch(reimbursementRepositoryProvider).listReimbursementSheets();
 });
+
+final trashedReimbursementSheetListProvider =
+    FutureProvider<List<ReimbursementSheet>>((ref) {
+      return ref
+          .watch(reimbursementRepositoryProvider)
+          .listTrashedReimbursementSheets();
+    });
 
 final reimbursementByIdProvider =
     FutureProvider.family<ReimbursementSheet?, int>((ref, id) {
@@ -32,4 +40,11 @@ final reimbursementAvailableTicketsProvider = FutureProvider<List<Ticket>>((
 final reimbursementCsvExportServiceProvider =
     Provider<ReimbursementCsvExportService>((ref) {
       return ReimbursementCsvExportService();
+    });
+
+final reimbursementPackageExportServiceProvider =
+    Provider<ReimbursementPackageExportService>((ref) {
+      return ReimbursementPackageExportService(
+        csvExportService: ref.watch(reimbursementCsvExportServiceProvider),
+      );
     });

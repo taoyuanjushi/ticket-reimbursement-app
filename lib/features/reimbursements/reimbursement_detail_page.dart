@@ -3,10 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:ticket_box/data/local/app_database.dart';
 import 'package:ticket_box/data/providers/database_providers.dart';
+import 'package:ticket_box/features/home/home_providers.dart';
 import 'package:ticket_box/features/reminders/reminder_providers.dart';
 import 'package:ticket_box/features/reminders/reminder_support.dart';
 import 'package:ticket_box/features/reimbursements/reimbursement_csv_export_service.dart';
 import 'package:ticket_box/features/reimbursements/reimbursement_form_page.dart';
+import 'package:ticket_box/features/reimbursements/reimbursement_package_export_service.dart';
 import 'package:ticket_box/features/reimbursements/reimbursement_providers.dart';
 import 'package:ticket_box/features/reimbursements/reimbursement_support.dart';
 import 'package:ticket_box/features/tickets/ticket_providers.dart';
@@ -51,6 +53,7 @@ class ReimbursementDetailPage extends ConsumerWidget {
                 _SheetActionCard(
                   onReminder: () => _createReminder(context, ref, sheet),
                   onEdit: () => _openEditPage(context, sheet),
+                  onDelete: () => _deleteSheet(context, ref, sheet),
                 ),
                 const SizedBox(height: 16),
                 linkedTicketsAsync.when(
@@ -67,6 +70,8 @@ class ReimbursementDetailPage extends ConsumerWidget {
                           _openAttachSheet(context, ref, sheet.id),
                       onExportPressed: () =>
                           _exportCsv(context, ref, sheet, linkedTickets),
+                      onExportPackagePressed: () =>
+                          _exportPackage(context, ref, sheet, linkedTickets),
                       onRemoveTicket: (ticketId) =>
                           _removeTicket(context, ref, ticketId),
                     );
@@ -189,6 +194,62 @@ class ReimbursementDetailPage extends ConsumerWidget {
     }
   }
 
+  Future<void> _deleteSheet(
+    BuildContext context,
+    WidgetRef ref,
+    ReimbursementSheet sheet,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('删除报销单'),
+          content: const Text('报销单会移入回收站，关联票据和附件不会删除。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('移入回收站'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true || !context.mounted) {
+      return;
+    }
+
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+
+    try {
+      await ref
+          .read(reimbursementRepositoryProvider)
+          .moveReimbursementSheetToTrash(sheet.id);
+    } catch (_) {
+      if (!context.mounted) {
+        return;
+      }
+
+      messenger.showSnackBar(const SnackBar(content: Text('移入回收站失败，请稍后重试')));
+      return;
+    }
+
+    ref.invalidate(reimbursementListProvider);
+    ref.invalidate(trashedReimbursementSheetListProvider);
+    ref.invalidate(reimbursementByIdProvider(sheet.id));
+    ref.invalidate(reimbursementLinkedTicketsProvider(sheet.id));
+    ref.invalidate(reimbursementAvailableTicketsProvider);
+    ref.invalidate(homeWorkbenchProvider);
+
+    navigator.pop();
+    messenger.showSnackBar(const SnackBar(content: Text('报销单已移入回收站')));
+  }
+
   Future<void> _openAttachSheet(
     BuildContext context,
     WidgetRef ref,
@@ -301,6 +362,146 @@ class ReimbursementDetailPage extends ConsumerWidget {
     }
   }
 
+  Future<void> _exportPackage(
+    BuildContext context,
+    WidgetRef ref,
+    ReimbursementSheet sheet,
+    List<Ticket> linkedTickets,
+  ) async {
+    final packageExportService = ref.read(
+      reimbursementPackageExportServiceProvider,
+    );
+    ReimbursementPackagePreview preview;
+
+    try {
+      preview = await packageExportService.previewPackage(
+        tickets: linkedTickets,
+      );
+    } catch (_) {
+      if (!context.mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('读取材料包预览失败，请稍后重试')));
+      return;
+    }
+
+    if (!context.mounted) {
+      return;
+    }
+
+    final shouldExport = await _confirmPackageExport(context, preview);
+    if (shouldExport != true) {
+      return;
+    }
+
+    try {
+      final result = await packageExportService.exportPackage(
+        sheet: sheet,
+        tickets: linkedTickets,
+      );
+
+      if (!context.mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('报销材料包已导出')));
+
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) {
+          return AlertDialog(
+            title: const Text('导出成功'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '已打包 ${result.ticketCount} 张票据，包含 ${result.attachmentFileCount} 个附件。',
+                ),
+                if (result.missingAttachmentCount > 0) ...[
+                  const SizedBox(height: 8),
+                  Text('有 ${result.missingAttachmentCount} 个附件缺失，已写入说明。'),
+                ],
+                const SizedBox(height: 12),
+                const Text('文件路径'),
+                const SizedBox(height: 8),
+                SelectableText(result.filePath),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('关闭'),
+              ),
+              FilledButton.icon(
+                onPressed: () => _shareReimbursementPackage(
+                  pageContext: context,
+                  dialogContext: dialogContext,
+                  result: result,
+                ),
+                icon: const Icon(Icons.share_outlined),
+                label: const Text('分享文件'),
+              ),
+            ],
+          );
+        },
+      );
+    } catch (_) {
+      if (!context.mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('导出材料包失败，请稍后重试')));
+    }
+  }
+
+  Future<bool?> _confirmPackageExport(
+    BuildContext context,
+    ReimbursementPackagePreview preview,
+  ) {
+    return showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return _PackagePreviewDialog(preview: preview);
+      },
+    );
+  }
+
+  Future<void> _shareReimbursementPackage({
+    required BuildContext pageContext,
+    required BuildContext dialogContext,
+    required ReimbursementPackageExportResult result,
+  }) async {
+    try {
+      await SharePlus.instance.share(
+        ShareParams(
+          files: [XFile(result.filePath)],
+          subject: '报销材料包',
+          text: '导出文件：${result.fileName}',
+        ),
+      );
+
+      if (dialogContext.mounted) {
+        Navigator.of(dialogContext).pop();
+      }
+    } catch (_) {
+      if (!pageContext.mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(
+        pageContext,
+      ).showSnackBar(const SnackBar(content: Text('分享失败，请稍后重试')));
+    }
+  }
+
   Future<void> _removeTicket(
     BuildContext context,
     WidgetRef ref,
@@ -331,6 +532,181 @@ class ReimbursementDetailPage extends ConsumerWidget {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(const SnackBar(content: Text('票据已移出报销单')));
+  }
+}
+
+class _PackagePreviewDialog extends StatelessWidget {
+  const _PackagePreviewDialog({required this.preview});
+
+  final ReimbursementPackagePreview preview;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+
+    return AlertDialog(
+      key: const ValueKey('reimbursement-package-preview-dialog'),
+      title: const Text('导出报销材料包'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _PackagePreviewMetric(
+              label: '票据数量',
+              value: '${preview.ticketCount}',
+              valueKey: 'reimbursement-package-preview-ticket-count',
+            ),
+            _PackagePreviewMetric(
+              label: '可用附件数量',
+              value: '${preview.availableAttachmentCount}',
+              valueKey: 'reimbursement-package-preview-available-count',
+            ),
+            _PackagePreviewMetric(
+              label: '无附件票据数量',
+              value: '${preview.noAttachmentTicketCount}',
+              valueKey: 'reimbursement-package-preview-no-attachment-count',
+            ),
+            _PackagePreviewMetric(
+              label: '附件文件缺失数量',
+              value: '${preview.missingAttachmentFileCount}',
+              valueKey: 'reimbursement-package-preview-missing-count',
+            ),
+            const SizedBox(height: 16),
+            Text(
+              '将导出内容',
+              style: Theme.of(
+                context,
+              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 10),
+            const _PackagePreviewContentItem(label: '报销清单.csv'),
+            const _PackagePreviewContentItem(label: '说明.txt'),
+            _PackagePreviewContentItem(
+              label: '附件文件（${preview.availableAttachmentCount} 个）',
+            ),
+            if (preview.missingAttachmentFileCount > 0) ...[
+              const SizedBox(height: 12),
+              _PackagePreviewNotice(
+                icon: Icons.warning_amber_rounded,
+                color: colors.error,
+                text:
+                    '有 ${preview.missingAttachmentFileCount} 个附件文件找不到，导出会继续，详情会写入说明。',
+              ),
+            ],
+            if (preview.noAttachmentTicketCount > 0) ...[
+              const SizedBox(height: 10),
+              _PackagePreviewNotice(
+                icon: Icons.info_outline_rounded,
+                color: colors.primary,
+                text: '有 ${preview.noAttachmentTicketCount} 张票据未附加文件，导出会继续。',
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          key: const ValueKey('reimbursement-package-preview-confirm-button'),
+          onPressed: () => Navigator.of(context).pop(true),
+          child: const Text('继续导出'),
+        ),
+      ],
+    );
+  }
+}
+
+class _PackagePreviewMetric extends StatelessWidget {
+  const _PackagePreviewMetric({
+    required this.label,
+    required this.value,
+    required this.valueKey,
+  });
+
+  final String label;
+  final String value;
+  final String valueKey;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
+            ),
+          ),
+          Text(
+            value,
+            key: ValueKey(valueKey),
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PackagePreviewContentItem extends StatelessWidget {
+  const _PackagePreviewContentItem({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          Icon(
+            Icons.check_circle_outline_rounded,
+            size: 18,
+            color: colors.primary,
+          ),
+          const SizedBox(width: 8),
+          Expanded(child: Text(label)),
+        ],
+      ),
+    );
+  }
+}
+
+class _PackagePreviewNotice extends StatelessWidget {
+  const _PackagePreviewNotice({
+    required this.icon,
+    required this.color,
+    required this.text,
+  });
+
+  final IconData icon;
+  final Color color;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 18, color: color),
+        const SizedBox(width: 8),
+        Expanded(child: Text(text)),
+      ],
+    );
   }
 }
 
@@ -400,10 +776,15 @@ class _SheetHeadlineCard extends StatelessWidget {
 }
 
 class _SheetActionCard extends StatelessWidget {
-  const _SheetActionCard({required this.onReminder, required this.onEdit});
+  const _SheetActionCard({
+    required this.onReminder,
+    required this.onEdit,
+    required this.onDelete,
+  });
 
   final VoidCallback onReminder;
   final VoidCallback onEdit;
+  final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -425,6 +806,18 @@ class _SheetActionCard extends StatelessWidget {
             icon: const Icon(Icons.notifications_active_outlined),
             label: const Text('创建提醒'),
           ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: onDelete,
+              style: TextButton.styleFrom(
+                foregroundColor: Theme.of(context).colorScheme.error,
+              ),
+              icon: const Icon(Icons.delete_outline),
+              label: const Text('删除报销单'),
+            ),
+          ),
         ],
       ),
     );
@@ -437,6 +830,7 @@ class _LinkedTicketsSection extends StatelessWidget {
     required this.totalAmountInCents,
     required this.onAttachPressed,
     required this.onExportPressed,
+    required this.onExportPackagePressed,
     required this.onRemoveTicket,
   });
 
@@ -444,6 +838,7 @@ class _LinkedTicketsSection extends StatelessWidget {
   final int totalAmountInCents;
   final VoidCallback onAttachPressed;
   final VoidCallback onExportPressed;
+  final VoidCallback onExportPackagePressed;
   final ValueChanged<int> onRemoveTicket;
 
   @override
@@ -471,6 +866,12 @@ class _LinkedTicketsSection extends StatelessWidget {
                 onPressed: onExportPressed,
                 icon: const Icon(Icons.file_download_outlined),
                 label: const Text('导出 CSV'),
+              ),
+              OutlinedButton.icon(
+                key: const ValueKey('reimbursement-package-export-button'),
+                onPressed: onExportPackagePressed,
+                icon: const Icon(Icons.inventory_2_outlined),
+                label: const Text('导出报销材料包'),
               ),
             ],
           ),

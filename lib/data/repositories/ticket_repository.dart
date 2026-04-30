@@ -21,15 +21,54 @@ class TicketRepository {
   }
 
   Future<int> deleteTicket(int id) {
-    return (database.delete(
-      database.tickets,
-    )..where((ticket) => ticket.id.equals(id))).go();
+    return moveTicketToTrash(id);
   }
 
-  Future<Ticket?> getTicketById(int id) {
-    return (database.select(
-      database.tickets,
-    )..where((ticket) => ticket.id.equals(id))).getSingleOrNull();
+  Future<int> moveTicketToTrash(int id) {
+    final now = DateTime.now();
+    return (database.update(database.tickets)
+          ..where((ticket) => ticket.id.equals(id) & ticket.deletedAt.isNull()))
+        .write(TicketsCompanion(deletedAt: Value(now), updatedAt: Value(now)));
+  }
+
+  Future<int> restoreTicket(int id) {
+    return (database.update(database.tickets)..where(
+          (ticket) => ticket.id.equals(id) & ticket.deletedAt.isNotNull(),
+        ))
+        .write(
+          TicketsCompanion(
+            deletedAt: const Value(null),
+            updatedAt: Value(DateTime.now()),
+          ),
+        );
+  }
+
+  Future<int> permanentlyDeleteTicket(int id) {
+    return database.transaction(() async {
+      final deletedCount =
+          await (database.delete(database.tickets)..where(
+                (ticket) => ticket.id.equals(id) & ticket.deletedAt.isNotNull(),
+              ))
+              .go();
+
+      if (deletedCount > 0) {
+        await (database.delete(
+          database.ticketTags,
+        )..where((row) => row.ticketId.equals(id))).go();
+      }
+
+      return deletedCount;
+    });
+  }
+
+  Future<Ticket?> getTicketById(int id, {bool includeTrashed = false}) {
+    final query = database.select(database.tickets)
+      ..where((ticket) => ticket.id.equals(id));
+    if (!includeTrashed) {
+      query.where((ticket) => ticket.deletedAt.isNull());
+    }
+
+    return query.getSingleOrNull();
   }
 
   Future<List<Ticket>> listTickets({
@@ -58,10 +97,24 @@ class TicketRepository {
     return query.get();
   }
 
+  Future<List<Ticket>> listTrashedTickets() {
+    final query = database.select(database.tickets)
+      ..where((ticket) => ticket.deletedAt.isNotNull())
+      ..orderBy([
+        (ticket) =>
+            OrderingTerm(expression: ticket.deletedAt, mode: OrderingMode.desc),
+        (ticket) =>
+            OrderingTerm(expression: ticket.updatedAt, mode: OrderingMode.desc),
+      ]);
+
+    return query.get();
+  }
+
   Future<List<Ticket>> filterTickets({
     String? status,
     String? type,
     DateTime? month,
+    int? tagId,
     String? keyword,
     TicketSortField sortField = TicketSortField.date,
     TicketSortDirection sortDirection = TicketSortDirection.descending,
@@ -90,6 +143,14 @@ class TicketRepository {
       );
     }
 
+    if (tagId != null) {
+      final taggedTicketIds = database.selectOnly(database.ticketTags)
+        ..addColumns([database.ticketTags.ticketId])
+        ..where(database.ticketTags.tagId.equals(tagId));
+
+      statement.where((ticket) => ticket.id.isInQuery(taggedTicketIds));
+    }
+
     final searchQuery = keyword?.trim();
     if (searchQuery != null && searchQuery.isNotEmpty) {
       final pattern = '%$searchQuery%';
@@ -109,8 +170,9 @@ class TicketRepository {
       return Future.value(0);
     }
 
-    final statement = database.update(database.tickets)
-      ..where((ticket) => ticket.id.isIn(ticketIds));
+    final statement = database.update(
+      database.tickets,
+    )..where((ticket) => ticket.id.isIn(ticketIds) & ticket.deletedAt.isNull());
 
     return statement.write(
       TicketsCompanion(
@@ -130,21 +192,30 @@ class TicketRepository {
       return Future.value(0);
     }
 
-    return (database.update(
-      database.tickets,
-    )..where((ticket) => ticket.id.isIn(ticketIds))).write(
-      TicketsCompanion(status: Value(status), updatedAt: Value(DateTime.now())),
-    );
+    return (database.update(database.tickets)..where(
+          (ticket) => ticket.id.isIn(ticketIds) & ticket.deletedAt.isNull(),
+        ))
+        .write(
+          TicketsCompanion(
+            status: Value(status),
+            updatedAt: Value(DateTime.now()),
+          ),
+        );
   }
 
   Future<int> deleteTickets(List<int> ids) {
+    return moveTicketsToTrash(ids);
+  }
+
+  Future<int> moveTicketsToTrash(List<int> ids) {
     if (ids.isEmpty) {
       return Future.value(0);
     }
 
-    return (database.delete(
-      database.tickets,
-    )..where((ticket) => ticket.id.isIn(ids))).go();
+    final now = DateTime.now();
+    return (database.update(database.tickets)
+          ..where((ticket) => ticket.id.isIn(ids) & ticket.deletedAt.isNull()))
+        .write(TicketsCompanion(deletedAt: Value(now), updatedAt: Value(now)));
   }
 
   SimpleSelectStatement<Tickets, Ticket> _orderedTicketQuery({
@@ -152,6 +223,7 @@ class TicketRepository {
     TicketSortDirection sortDirection = TicketSortDirection.descending,
   }) {
     final query = database.select(database.tickets);
+    query.where((ticket) => ticket.deletedAt.isNull());
 
     query.orderBy(_buildOrdering(sortField, sortDirection));
 

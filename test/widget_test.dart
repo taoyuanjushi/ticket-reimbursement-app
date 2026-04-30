@@ -7,7 +7,9 @@ import 'package:ticket_box/app/app.dart';
 import 'package:ticket_box/data/local/app_database.dart';
 import 'package:ticket_box/data/providers/database_providers.dart';
 import 'package:ticket_box/features/home/home_page.dart';
+import 'package:ticket_box/features/home/home_providers.dart';
 import 'package:ticket_box/data/repositories/reimbursement_repository.dart';
+import 'package:ticket_box/data/repositories/tag_repository.dart';
 import 'package:ticket_box/data/repositories/ticket_repository.dart';
 import 'package:ticket_box/features/reimbursements/reimbursement_detail_page.dart';
 import 'package:ticket_box/features/reimbursements/reimbursements_page.dart';
@@ -105,7 +107,10 @@ void main() {
 
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [appDatabaseProvider.overrideWithValue(database)],
+        overrides: [
+          appDatabaseProvider.overrideWithValue(database),
+          homeCurrentDateProvider.overrideWithValue(DateTime(2026, 4, 29)),
+        ],
         child: const MaterialApp(home: Scaffold(body: HomePage())),
       ),
     );
@@ -116,7 +121,7 @@ void main() {
     expect(find.text('工作概览'), findsOneWidget);
     expect(
       find.descendant(
-        of: find.byKey(const ValueKey('home-summary-total-tickets')),
+        of: find.byKey(const ValueKey('home-summary-ticket-count')),
         matching: find.text('3'),
       ),
       findsOneWidget,
@@ -125,6 +130,20 @@ void main() {
       find.descendant(
         of: find.byKey(const ValueKey('home-summary-pending-tickets')),
         matching: find.text('2'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('home-summary-ticket-amount')),
+        matching: find.text('¥176.00'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('home-summary-pending-amount')),
+        matching: find.text('¥140.00'),
       ),
       findsOneWidget,
     );
@@ -214,6 +233,31 @@ void main() {
     expect(find.text('开启本地提醒'), findsOneWidget);
     expect(find.text('默认提醒时间'), findsOneWidget);
     await tester.scrollUntilVisible(
+      find.text('回收站'),
+      300,
+      scrollable: _settingsScrollable(),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('回收站'), findsOneWidget);
+    expect(find.text('已删除票据数量'), findsOneWidget);
+    expect(find.text('已删除报销单数量'), findsOneWidget);
+    expect(
+      tester
+          .widget<Text>(
+            find.byKey(const ValueKey('settings-recycle-bin-ticket-count')),
+          )
+          .data,
+      '0',
+    );
+    expect(
+      tester
+          .widget<Text>(
+            find.byKey(const ValueKey('settings-recycle-bin-sheet-count')),
+          )
+          .data,
+      '0',
+    );
+    await tester.scrollUntilVisible(
       find.text('本地数据库路径'),
       300,
       scrollable: _settingsScrollable(),
@@ -221,6 +265,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('本地数据库路径'), findsOneWidget);
     expect(find.text('无效附件引用：2 条'), findsOneWidget);
+    expect(find.text('导出本地备份'), findsOneWidget);
+    expect(find.text('恢复本地备份'), findsOneWidget);
     expect(find.text('清空导出 CSV'), findsOneWidget);
     expect(find.text('清理无效附件引用'), findsOneWidget);
     expect(find.text('取消全部待提醒通知'), findsOneWidget);
@@ -469,12 +515,18 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('ticket-batch-delete-button')));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('删除').last);
+    await tester.tap(find.text('移入回收站').last);
     await tester.pumpAndSettle();
 
     expect(
       (await ticketRepository.listTickets()).map((ticket) => ticket.title),
       ['保留票据'],
+    );
+    expect(
+      (await ticketRepository.listTrashedTickets()).map(
+        (ticket) => ticket.title,
+      ),
+      ['待删票据'],
     );
     expect(find.text('待删票据'), findsNothing);
     expect(find.text('保留票据'), findsOneWidget);
@@ -644,6 +696,80 @@ void main() {
     expect(find.textContaining('排序：按金额 · 升序'), findsOneWidget);
   });
 
+  testWidgets('tickets page supports filtering by tag', (
+    WidgetTester tester,
+  ) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+
+    final ticketRepository = TicketRepository(database);
+    final tagRepository = TagRepository(database);
+    final travelTagId = await tagRepository.createTag('差旅');
+    final officeTagId = await tagRepository.createTag('办公');
+    final firstTicketId = await ticketRepository.createTicket(
+      TicketsCompanion.insert(
+        title: '高铁票',
+        amountInCents: 13800,
+        occurredOn: DateTime(2026, 4, 15),
+        type: 'transport',
+        status: 'submitted',
+      ),
+    );
+    final secondTicketId = await ticketRepository.createTicket(
+      TicketsCompanion.insert(
+        title: '酒店票',
+        amountInCents: 36800,
+        occurredOn: DateTime(2026, 4, 16),
+        type: 'travel',
+        status: 'submitted',
+      ),
+    );
+    final thirdTicketId = await ticketRepository.createTicket(
+      TicketsCompanion.insert(
+        title: '显示器发票',
+        amountInCents: 259900,
+        occurredOn: DateTime(2026, 4, 17),
+        type: 'office',
+        status: 'submitted',
+      ),
+    );
+    await tagRepository.replaceTagsForTicket(
+      ticketId: firstTicketId,
+      tagIds: [travelTagId],
+    );
+    await tagRepository.replaceTagsForTicket(
+      ticketId: secondTicketId,
+      tagIds: [travelTagId],
+    );
+    await tagRepository.replaceTagsForTicket(
+      ticketId: thirdTicketId,
+      tagIds: [officeTagId],
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [appDatabaseProvider.overrideWithValue(database)],
+        child: const MaterialApp(home: Scaffold(body: TicketsPage())),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(TicketsPage)),
+    );
+    expect(
+      find.byKey(const ValueKey('ticket-tag-filter-input')),
+      findsOneWidget,
+    );
+    container.read(ticketTagFilterProvider.notifier).setFilter(travelTagId);
+    final filteredTickets = await container.read(ticketListProvider.future);
+    await tester.pumpAndSettle();
+
+    expect(container.read(ticketHasSearchOrFilterProvider), isTrue);
+    expect(container.read(ticketArchiveResultsVisibleProvider), isTrue);
+    expect(filteredTickets.map((ticket) => ticket.title), ['酒店票', '高铁票']);
+  });
+
   testWidgets('ticket detail page shows reminder action', (
     WidgetTester tester,
   ) async {
@@ -747,6 +873,49 @@ void main() {
     );
     expect(find.text('显示器发票'), findsOneWidget);
     expect(find.text('导出 CSV'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('reimbursement-package-export-button')),
+      findsOneWidget,
+    );
     expect(find.text('创建提醒'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('reimbursement-package-export-button')),
+      300,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('reimbursement-package-export-button')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('reimbursement-package-preview-dialog')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('reimbursement-package-preview-ticket-count')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(
+        const ValueKey('reimbursement-package-preview-available-count'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(
+        const ValueKey('reimbursement-package-preview-no-attachment-count'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('reimbursement-package-preview-missing-count')),
+      findsOneWidget,
+    );
+    expect(find.text('继续导出'), findsOneWidget);
+
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
   });
 }

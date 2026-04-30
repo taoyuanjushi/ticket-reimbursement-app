@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:ticket_box/data/local/app_database.dart';
 import 'package:ticket_box/data/repositories/reimbursement_repository.dart';
@@ -5,7 +7,9 @@ import 'package:ticket_box/data/repositories/ticket_repository.dart';
 
 final appDatabaseProvider = Provider<AppDatabase>((ref) {
   final database = AppDatabase();
-  ref.onDispose(database.close);
+  ref.onDispose(() {
+    unawaited(database.close().catchError((_) {}));
+  });
   return database;
 });
 

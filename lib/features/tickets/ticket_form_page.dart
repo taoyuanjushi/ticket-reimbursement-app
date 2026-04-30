@@ -3,10 +3,15 @@ import 'dart:io';
 import 'package:drift/drift.dart' as drift;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 import 'package:ticket_box/data/local/app_database.dart';
 import 'package:ticket_box/data/providers/database_providers.dart';
 import 'package:ticket_box/features/reimbursements/reimbursement_providers.dart';
+import 'package:ticket_box/features/tags/tag_management_page.dart';
+import 'package:ticket_box/features/tags/tag_providers.dart';
 import 'package:ticket_box/features/tickets/ticket_file_service.dart';
+import 'package:ticket_box/features/tickets/ticket_ocr_parse_service.dart';
+import 'package:ticket_box/features/tickets/ticket_ocr_service.dart';
 import 'package:ticket_box/features/tickets/ticket_providers.dart';
 import 'package:ticket_box/features/tickets/ticket_support.dart';
 
@@ -30,9 +35,36 @@ class _TicketFormPageState extends ConsumerState<TicketFormPage> {
   String? _selectedType;
   String? _selectedStatus;
   bool _isSaving = false;
+  bool _isRecognizingText = false;
   _TicketAttachmentDraft? _attachment;
+  TicketOcrResult? _ocrResult;
+  Set<int> _selectedTagIds = <int>{};
 
   bool get _isEditing => widget.initialTicket != null;
+
+  String? get _currentImageAttachmentPath {
+    final attachment = _attachment;
+    final previewPath = attachment?.previewPath;
+    if (attachment == null ||
+        !isImageTicketFile(attachment.fileType) ||
+        previewPath == null ||
+        previewPath.trim().isEmpty) {
+      return null;
+    }
+
+    if (!File(previewPath).existsSync()) {
+      return null;
+    }
+
+    return previewPath;
+  }
+
+  bool get _isTitleEmpty => _titleController.text.trim().isEmpty;
+
+  bool get _isAmountEmpty => _amountController.text.trim().isEmpty;
+
+  bool get _isDateEmpty =>
+      _selectedDate == null || _dateController.text.trim().isEmpty;
 
   @override
   void initState() {
@@ -70,6 +102,7 @@ class _TicketFormPageState extends ConsumerState<TicketFormPage> {
     }
 
     _dateController.text = formatTicketDate(_selectedDate!);
+    _loadInitialTags();
   }
 
   @override
@@ -81,9 +114,34 @@ class _TicketFormPageState extends ConsumerState<TicketFormPage> {
     super.dispose();
   }
 
+  Future<void> _loadInitialTags() async {
+    final initialTicket = widget.initialTicket;
+    if (initialTicket == null) {
+      return;
+    }
+
+    final tagIds = await ref
+        .read(tagRepositoryProvider)
+        .listTagIdsForTicket(initialTicket.id);
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _selectedTagIds = tagIds.toSet();
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
+    final tagsAsync = ref.watch(tagListProvider);
+    final ocrSuggestions = _ocrResult == null
+        ? null
+        : ref.read(ticketOcrParseServiceProvider).parse(_ocrResult!.text);
+    final canFillBlankFields = ocrSuggestions != null
+        ? _canFillBlankFields(ocrSuggestions)
+        : false;
 
     return Scaffold(
       appBar: AppBar(title: Text(_isEditing ? '编辑票据' : '新增票据')),
@@ -230,12 +288,54 @@ class _TicketFormPageState extends ConsumerState<TicketFormPage> {
                       textInputAction: TextInputAction.done,
                     ),
                     const SizedBox(height: 20),
+                    _TagSelectionSection(
+                      tagsAsync: tagsAsync,
+                      selectedTagIds: _selectedTagIds,
+                      onToggleTag: _toggleTag,
+                      onManageTags: _openTagManagement,
+                    ),
+                    const SizedBox(height: 20),
                     _AttachmentSection(
                       attachment: _attachment,
+                      isRecognizingText: _isRecognizingText,
                       onPickImage: _pickImage,
                       onPickPdf: _pickPdf,
                       onRemove: _removeAttachment,
+                      onRecognizeText: _currentImageAttachmentPath == null
+                          ? null
+                          : _recognizeImageText,
                     ),
+                    if (_ocrResult != null) ...[
+                      const SizedBox(height: 20),
+                      _OcrResultSection(
+                        result: _ocrResult!,
+                        isRecognizingText: _isRecognizingText,
+                        onCopy: _copyOcrResult,
+                        onRetry: _recognizeImageText,
+                        onClear: _clearOcrResult,
+                      ),
+                    ],
+                    if (ocrSuggestions != null && ocrSuggestions.hasAny) ...[
+                      const SizedBox(height: 20),
+                      _OcrSuggestionSection(
+                        suggestions: ocrSuggestions,
+                        canFillBlankFields: canFillBlankFields,
+                        onFillBlankFields: () =>
+                            _fillBlankFieldsFromSuggestions(ocrSuggestions),
+                        onApplyTitle: ocrSuggestions.title == null
+                            ? null
+                            : () =>
+                                  _applyTitleSuggestion(ocrSuggestions.title!),
+                        onApplyAmount: ocrSuggestions.amount == null
+                            ? null
+                            : () => _applyAmountSuggestion(
+                                ocrSuggestions.amount!,
+                              ),
+                        onApplyDate: ocrSuggestions.date == null
+                            ? null
+                            : () => _applyDateSuggestion(ocrSuggestions.date!),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -261,6 +361,36 @@ class _TicketFormPageState extends ConsumerState<TicketFormPage> {
         ),
       ),
     );
+  }
+
+  void _toggleTag(int tagId, bool selected) {
+    setState(() {
+      final nextSelectedTagIds = Set<int>.from(_selectedTagIds);
+      if (selected) {
+        nextSelectedTagIds.add(tagId);
+      } else {
+        nextSelectedTagIds.remove(tagId);
+      }
+      _selectedTagIds = nextSelectedTagIds;
+    });
+  }
+
+  Future<void> _openTagManagement() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(builder: (_) => const TagManagementPage()),
+    );
+
+    final tags = await ref.refresh(tagListProvider.future);
+    if (!mounted) {
+      return;
+    }
+
+    final availableTagIds = tags.map((tag) => tag.id).toSet();
+    setState(() {
+      _selectedTagIds = _selectedTagIds
+          .where(availableTagIds.contains)
+          .toSet();
+    });
   }
 
   Future<void> _pickDate() async {
@@ -297,6 +427,7 @@ class _TicketFormPageState extends ConsumerState<TicketFormPage> {
         fileName: pickedFile.fileName,
         fileType: pickedFile.fileType,
       );
+      _ocrResult = null;
     });
   }
 
@@ -312,13 +443,281 @@ class _TicketFormPageState extends ConsumerState<TicketFormPage> {
         fileName: pickedFile.fileName,
         fileType: pickedFile.fileType,
       );
+      _ocrResult = null;
     });
   }
 
   void _removeAttachment() {
     setState(() {
       _attachment = null;
+      _ocrResult = null;
     });
+  }
+
+  Future<void> _recognizeImageText() async {
+    final imagePath = _currentImageAttachmentPath;
+    if (imagePath == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请先选择可用的图片附件')));
+      return;
+    }
+
+    setState(() {
+      _isRecognizingText = true;
+    });
+
+    try {
+      final result = await ref
+          .read(ticketOcrServiceProvider)
+          .recognizeImageText(imagePath);
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _ocrResult = result;
+      });
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('已识别图片文字，可作为填写参考')));
+    } on TicketOcrNoTextException {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('未识别到文字，请换一张更清晰的图片')));
+    } on TicketOcrInvalidImageException {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('图片不可用，请重新选择')));
+    } on TicketOcrException {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('识别失败，请稍后重试')));
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('识别失败，请稍后重试')));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isRecognizingText = false;
+        });
+      }
+    }
+  }
+
+  void _clearOcrResult() {
+    if (_ocrResult == null) {
+      return;
+    }
+
+    setState(() {
+      _ocrResult = null;
+    });
+
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('已清除识别结果')));
+  }
+
+  bool _canFillBlankFields(TicketOcrSuggestions suggestions) {
+    return (suggestions.title != null && _isTitleEmpty) ||
+        (suggestions.amount != null && _isAmountEmpty) ||
+        (suggestions.date != null && _isDateEmpty);
+  }
+
+  void _fillBlankFieldsFromSuggestions(TicketOcrSuggestions suggestions) {
+    if (!_canFillBlankFields(suggestions)) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('当前没有可填入的空白字段')));
+      return;
+    }
+
+    setState(() {
+      final title = suggestions.title;
+      if (title != null && _isTitleEmpty) {
+        final nextValue = title.value.trim();
+        if (nextValue.isNotEmpty) {
+          _titleController
+            ..text = nextValue
+            ..selection = TextSelection.collapsed(offset: nextValue.length);
+        }
+      }
+
+      final amount = suggestions.amount;
+      if (amount != null && _isAmountEmpty) {
+        final nextValue = amount.displayValue;
+        _amountController
+          ..text = nextValue
+          ..selection = TextSelection.collapsed(offset: nextValue.length);
+      }
+
+      final date = suggestions.date;
+      if (date != null && _isDateEmpty) {
+        _selectedDate = date.value;
+        _dateController.text = date.displayValue;
+      }
+    });
+
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('已填入空白字段')));
+  }
+
+  Future<void> _copyOcrResult() async {
+    final text = _ocrResult?.text.trim();
+    if (text == null || text.isEmpty) {
+      return;
+    }
+
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) {
+      return;
+    }
+
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('识别结果已复制')));
+  }
+
+  Future<void> _applyTitleSuggestion(
+    TicketOcrSuggestion<String> suggestion,
+  ) async {
+    final nextValue = suggestion.value.trim();
+    if (nextValue.isEmpty) {
+      return;
+    }
+
+    final confirmed = await _confirmReplaceIfNeeded(
+      fieldLabel: '标题',
+      currentValue: _titleController.text,
+      nextValue: nextValue,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setState(() {
+      _titleController
+        ..text = nextValue
+        ..selection = TextSelection.collapsed(offset: nextValue.length);
+    });
+    if (!mounted) {
+      return;
+    }
+
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('已应用标题建议')));
+  }
+
+  Future<void> _applyAmountSuggestion(
+    TicketOcrSuggestion<int> suggestion,
+  ) async {
+    final nextValue = suggestion.displayValue;
+    final confirmed = await _confirmReplaceIfNeeded(
+      fieldLabel: '金额',
+      currentValue: _amountController.text,
+      nextValue: nextValue,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setState(() {
+      _amountController
+        ..text = nextValue
+        ..selection = TextSelection.collapsed(offset: nextValue.length);
+    });
+    if (!mounted) {
+      return;
+    }
+
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('已应用金额建议')));
+  }
+
+  Future<void> _applyDateSuggestion(
+    TicketOcrSuggestion<DateTime> suggestion,
+  ) async {
+    final nextText = suggestion.displayValue;
+    final currentText = _selectedDate == null
+        ? ''
+        : formatTicketDate(_selectedDate!);
+    final confirmed = await _confirmReplaceIfNeeded(
+      fieldLabel: '日期',
+      currentValue: currentText,
+      nextValue: nextText,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setState(() {
+      _selectedDate = suggestion.value;
+      _dateController.text = nextText;
+    });
+
+    if (!mounted) {
+      return;
+    }
+
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('已应用日期建议')));
+  }
+
+  Future<bool> _confirmReplaceIfNeeded({
+    required String fieldLabel,
+    required String currentValue,
+    required String nextValue,
+  }) async {
+    final normalizedCurrent = currentValue.trim();
+    if (normalizedCurrent.isEmpty || normalizedCurrent == nextValue.trim()) {
+      return true;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: Text('替换$fieldLabel？'),
+          content: Text('当前$fieldLabel已有内容，是否替换为识别建议？'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('应用'),
+            ),
+          ],
+        );
+      },
+    );
+
+    return confirmed == true;
   }
 
   Future<void> _saveTicket() async {
@@ -348,6 +747,7 @@ class _TicketFormPageState extends ConsumerState<TicketFormPage> {
     });
 
     final repository = ref.read(ticketRepositoryProvider);
+    final tagRepository = ref.read(tagRepositoryProvider);
     final fileService = ref.read(ticketFileServiceProvider);
     final note = _noteController.text.trim().isEmpty
         ? null
@@ -396,9 +796,14 @@ class _TicketFormPageState extends ConsumerState<TicketFormPage> {
             updatedAt: DateTime.now(),
           ),
         );
+        await tagRepository.replaceTagsForTicket(
+          ticketId: initialTicket.id,
+          tagIds: _selectedTagIds.toList(growable: false),
+        );
         ref.invalidate(ticketByIdProvider(initialTicket.id));
+        ref.invalidate(ticketTagsProvider(initialTicket.id));
       } else {
-        await repository.createTicket(
+        final createdTicketId = await repository.createTicket(
           TicketsCompanion.insert(
             title: _titleController.text.trim(),
             amountInCents: amountInCents,
@@ -417,6 +822,11 @@ class _TicketFormPageState extends ConsumerState<TicketFormPage> {
                 : drift.Value(storedFile.fileType),
           ),
         );
+        await tagRepository.replaceTagsForTicket(
+          ticketId: createdTicketId,
+          tagIds: _selectedTagIds.toList(growable: false),
+        );
+        ref.invalidate(ticketTagsProvider(createdTicketId));
       }
 
       if (existingFilePath != null &&
@@ -478,18 +888,119 @@ class _TicketFormPageState extends ConsumerState<TicketFormPage> {
   }
 }
 
+class _TagSelectionSection extends StatelessWidget {
+  const _TagSelectionSection({
+    required this.tagsAsync,
+    required this.selectedTagIds,
+    required this.onToggleTag,
+    required this.onManageTags,
+  });
+
+  final AsyncValue<List<Tag>> tagsAsync;
+  final Set<int> selectedTagIds;
+  final void Function(int tagId, bool selected) onToggleTag;
+  final VoidCallback onManageTags;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: colors.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: colors.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '标签',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      selectedTagIds.isEmpty ? '未选择标签' : '已选 ${selectedTagIds.length} 个标签',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: colors.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              TextButton(onPressed: onManageTags, child: const Text('管理标签')),
+            ],
+          ),
+          const SizedBox(height: 14),
+          tagsAsync.when(
+            data: (tags) {
+              if (tags.isEmpty) {
+                return Text(
+                  '还没有标签，可先去管理标签。',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: colors.onSurfaceVariant,
+                  ),
+                );
+              }
+
+              return Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final tag in tags)
+                    FilterChip(
+                      label: Text(tag.name),
+                      selected: selectedTagIds.contains(tag.id),
+                      onSelected: (selected) => onToggleTag(tag.id, selected),
+                    ),
+                ],
+              );
+            },
+            loading: () => const Padding(
+              padding: EdgeInsets.symmetric(vertical: 12),
+              child: Center(child: CircularProgressIndicator()),
+            ),
+            error: (error, stackTrace) {
+              return Text(
+                '加载标签失败，请稍后重试。',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodyMedium?.copyWith(color: colors.error),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _AttachmentSection extends StatelessWidget {
   const _AttachmentSection({
     required this.attachment,
+    required this.isRecognizingText,
     required this.onPickImage,
     required this.onPickPdf,
     required this.onRemove,
+    required this.onRecognizeText,
   });
 
   final _TicketAttachmentDraft? attachment;
+  final bool isRecognizingText;
   final VoidCallback onPickImage;
   final VoidCallback onPickPdf;
   final VoidCallback onRemove;
+  final VoidCallback? onRecognizeText;
 
   @override
   Widget build(BuildContext context) {
@@ -606,6 +1117,292 @@ class _AttachmentSection extends StatelessWidget {
               ),
             ],
           ),
+          if (onRecognizeText != null) ...[
+            const SizedBox(height: 12),
+            FilledButton.tonalIcon(
+              key: const ValueKey('ticket-ocr-button'),
+              onPressed: isRecognizingText ? null : onRecognizeText,
+              icon: isRecognizingText
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.text_snippet_outlined),
+              label: Text(isRecognizingText ? '识别中...' : '识别图片文字'),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _OcrResultSection extends StatelessWidget {
+  const _OcrResultSection({
+    required this.result,
+    required this.isRecognizingText,
+    required this.onCopy,
+    required this.onRetry,
+    required this.onClear,
+  });
+
+  final TicketOcrResult result;
+  final bool isRecognizingText;
+  final VoidCallback onCopy;
+  final VoidCallback onRetry;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+
+    return Container(
+      key: const ValueKey('ticket-ocr-result-card'),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: colors.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: colors.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '识别结果',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '仅作参考，不会自动填入表单。',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: colors.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Container(
+            width: double.infinity,
+            constraints: const BoxConstraints(minHeight: 96, maxHeight: 220),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: colors.outlineVariant),
+            ),
+            child: SingleChildScrollView(
+              child: SelectableText(
+                result.text,
+                key: const ValueKey('ticket-ocr-result-text'),
+                style: Theme.of(
+                  context,
+                ).textTheme.bodyLarge?.copyWith(height: 1.5),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '共 ${result.lineCount} 行文字',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: colors.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        FilledButton.tonalIcon(
+                          onPressed: isRecognizingText ? null : onRetry,
+                          icon: isRecognizingText
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.refresh_outlined),
+                          label: Text(isRecognizingText ? '识别中...' : '重新识别'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: onCopy,
+                          icon: const Icon(Icons.content_copy_outlined),
+                          label: const Text('复制结果'),
+                        ),
+                        TextButton(
+                          onPressed: onClear,
+                          child: const Text('清除识别结果'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _OcrSuggestionSection extends StatelessWidget {
+  const _OcrSuggestionSection({
+    required this.suggestions,
+    required this.canFillBlankFields,
+    required this.onFillBlankFields,
+    required this.onApplyTitle,
+    required this.onApplyAmount,
+    required this.onApplyDate,
+  });
+
+  final TicketOcrSuggestions suggestions;
+  final bool canFillBlankFields;
+  final VoidCallback onFillBlankFields;
+  final VoidCallback? onApplyTitle;
+  final VoidCallback? onApplyAmount;
+  final VoidCallback? onApplyDate;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+
+    return Container(
+      key: const ValueKey('ticket-ocr-suggestion-card'),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: colors.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: colors.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '建议填入',
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '可逐项应用，也可先填入空白字段。',
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
+          ),
+          const SizedBox(height: 14),
+          FilledButton.tonalIcon(
+            onPressed: canFillBlankFields ? onFillBlankFields : null,
+            icon: const Icon(Icons.auto_fix_high_outlined),
+            label: const Text('填入空白字段'),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '只会填入当前仍为空的字段，不会覆盖已有内容。',
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: colors.onSurfaceVariant),
+          ),
+          if (suggestions.title != null) ...[
+            const SizedBox(height: 16),
+            _OcrSuggestionTile(
+              fieldLabel: '标题',
+              suggestion: suggestions.title!.displayValue,
+              onApply: onApplyTitle!,
+            ),
+          ],
+          if (suggestions.amount != null) ...[
+            const SizedBox(height: 12),
+            _OcrSuggestionTile(
+              fieldLabel: '金额',
+              suggestion: suggestions.amount!.displayValue,
+              onApply: onApplyAmount!,
+            ),
+          ],
+          if (suggestions.date != null) ...[
+            const SizedBox(height: 12),
+            _OcrSuggestionTile(
+              fieldLabel: '日期',
+              suggestion: suggestions.date!.displayValue,
+              onApply: onApplyDate!,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _OcrSuggestionTile extends StatelessWidget {
+  const _OcrSuggestionTile({
+    required this.fieldLabel,
+    required this.suggestion,
+    required this.onApply,
+  });
+
+  final String fieldLabel;
+  final String suggestion;
+  final VoidCallback onApply;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: colors.outlineVariant),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  fieldLabel,
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    color: colors.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  suggestion,
+                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    height: 1.4,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          FilledButton.tonal(onPressed: onApply, child: const Text('应用')),
         ],
       ),
     );

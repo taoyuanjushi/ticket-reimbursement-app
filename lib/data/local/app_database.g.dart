@@ -98,6 +98,17 @@ class $ReimbursementSheetsTable extends ReimbursementSheets
     requiredDuringInsert: false,
     defaultValue: currentDateAndTime,
   );
+  static const VerificationMeta _deletedAtMeta = const VerificationMeta(
+    'deletedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> deletedAt = GeneratedColumn<DateTime>(
+    'deleted_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -108,6 +119,7 @@ class $ReimbursementSheetsTable extends ReimbursementSheets
     reimbursedAt,
     createdAt,
     updatedAt,
+    deletedAt,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -177,6 +189,12 @@ class $ReimbursementSheetsTable extends ReimbursementSheets
         updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
       );
     }
+    if (data.containsKey('deleted_at')) {
+      context.handle(
+        _deletedAtMeta,
+        deletedAt.isAcceptableOrUnknown(data['deleted_at']!, _deletedAtMeta),
+      );
+    }
     return context;
   }
 
@@ -218,6 +236,10 @@ class $ReimbursementSheetsTable extends ReimbursementSheets
         DriftSqlType.dateTime,
         data['${effectivePrefix}updated_at'],
       )!,
+      deletedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}deleted_at'],
+      ),
     );
   }
 
@@ -237,6 +259,7 @@ class ReimbursementSheet extends DataClass
   final DateTime? reimbursedAt;
   final DateTime createdAt;
   final DateTime updatedAt;
+  final DateTime? deletedAt;
   const ReimbursementSheet({
     required this.id,
     required this.title,
@@ -246,6 +269,7 @@ class ReimbursementSheet extends DataClass
     this.reimbursedAt,
     required this.createdAt,
     required this.updatedAt,
+    this.deletedAt,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -264,6 +288,9 @@ class ReimbursementSheet extends DataClass
     }
     map['created_at'] = Variable<DateTime>(createdAt);
     map['updated_at'] = Variable<DateTime>(updatedAt);
+    if (!nullToAbsent || deletedAt != null) {
+      map['deleted_at'] = Variable<DateTime>(deletedAt);
+    }
     return map;
   }
 
@@ -283,6 +310,9 @@ class ReimbursementSheet extends DataClass
           : Value(reimbursedAt),
       createdAt: Value(createdAt),
       updatedAt: Value(updatedAt),
+      deletedAt: deletedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(deletedAt),
     );
   }
 
@@ -300,6 +330,7 @@ class ReimbursementSheet extends DataClass
       reimbursedAt: serializer.fromJson<DateTime?>(json['reimbursedAt']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
       updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
+      deletedAt: serializer.fromJson<DateTime?>(json['deletedAt']),
     );
   }
   @override
@@ -314,6 +345,7 @@ class ReimbursementSheet extends DataClass
       'reimbursedAt': serializer.toJson<DateTime?>(reimbursedAt),
       'createdAt': serializer.toJson<DateTime>(createdAt),
       'updatedAt': serializer.toJson<DateTime>(updatedAt),
+      'deletedAt': serializer.toJson<DateTime?>(deletedAt),
     };
   }
 
@@ -326,6 +358,7 @@ class ReimbursementSheet extends DataClass
     Value<DateTime?> reimbursedAt = const Value.absent(),
     DateTime? createdAt,
     DateTime? updatedAt,
+    Value<DateTime?> deletedAt = const Value.absent(),
   }) => ReimbursementSheet(
     id: id ?? this.id,
     title: title ?? this.title,
@@ -335,6 +368,7 @@ class ReimbursementSheet extends DataClass
     reimbursedAt: reimbursedAt.present ? reimbursedAt.value : this.reimbursedAt,
     createdAt: createdAt ?? this.createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
+    deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
   );
   ReimbursementSheet copyWithCompanion(ReimbursementSheetsCompanion data) {
     return ReimbursementSheet(
@@ -352,6 +386,7 @@ class ReimbursementSheet extends DataClass
           : this.reimbursedAt,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+      deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
     );
   }
 
@@ -365,7 +400,8 @@ class ReimbursementSheet extends DataClass
           ..write('submittedAt: $submittedAt, ')
           ..write('reimbursedAt: $reimbursedAt, ')
           ..write('createdAt: $createdAt, ')
-          ..write('updatedAt: $updatedAt')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deletedAt: $deletedAt')
           ..write(')'))
         .toString();
   }
@@ -380,6 +416,7 @@ class ReimbursementSheet extends DataClass
     reimbursedAt,
     createdAt,
     updatedAt,
+    deletedAt,
   );
   @override
   bool operator ==(Object other) =>
@@ -392,7 +429,8 @@ class ReimbursementSheet extends DataClass
           other.submittedAt == this.submittedAt &&
           other.reimbursedAt == this.reimbursedAt &&
           other.createdAt == this.createdAt &&
-          other.updatedAt == this.updatedAt);
+          other.updatedAt == this.updatedAt &&
+          other.deletedAt == this.deletedAt);
 }
 
 class ReimbursementSheetsCompanion extends UpdateCompanion<ReimbursementSheet> {
@@ -404,6 +442,7 @@ class ReimbursementSheetsCompanion extends UpdateCompanion<ReimbursementSheet> {
   final Value<DateTime?> reimbursedAt;
   final Value<DateTime> createdAt;
   final Value<DateTime> updatedAt;
+  final Value<DateTime?> deletedAt;
   const ReimbursementSheetsCompanion({
     this.id = const Value.absent(),
     this.title = const Value.absent(),
@@ -413,6 +452,7 @@ class ReimbursementSheetsCompanion extends UpdateCompanion<ReimbursementSheet> {
     this.reimbursedAt = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
+    this.deletedAt = const Value.absent(),
   });
   ReimbursementSheetsCompanion.insert({
     this.id = const Value.absent(),
@@ -423,6 +463,7 @@ class ReimbursementSheetsCompanion extends UpdateCompanion<ReimbursementSheet> {
     this.reimbursedAt = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
+    this.deletedAt = const Value.absent(),
   }) : title = Value(title);
   static Insertable<ReimbursementSheet> custom({
     Expression<int>? id,
@@ -433,6 +474,7 @@ class ReimbursementSheetsCompanion extends UpdateCompanion<ReimbursementSheet> {
     Expression<DateTime>? reimbursedAt,
     Expression<DateTime>? createdAt,
     Expression<DateTime>? updatedAt,
+    Expression<DateTime>? deletedAt,
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
@@ -443,6 +485,7 @@ class ReimbursementSheetsCompanion extends UpdateCompanion<ReimbursementSheet> {
       if (reimbursedAt != null) 'reimbursed_at': reimbursedAt,
       if (createdAt != null) 'created_at': createdAt,
       if (updatedAt != null) 'updated_at': updatedAt,
+      if (deletedAt != null) 'deleted_at': deletedAt,
     });
   }
 
@@ -455,6 +498,7 @@ class ReimbursementSheetsCompanion extends UpdateCompanion<ReimbursementSheet> {
     Value<DateTime?>? reimbursedAt,
     Value<DateTime>? createdAt,
     Value<DateTime>? updatedAt,
+    Value<DateTime?>? deletedAt,
   }) {
     return ReimbursementSheetsCompanion(
       id: id ?? this.id,
@@ -465,6 +509,7 @@ class ReimbursementSheetsCompanion extends UpdateCompanion<ReimbursementSheet> {
       reimbursedAt: reimbursedAt ?? this.reimbursedAt,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      deletedAt: deletedAt ?? this.deletedAt,
     );
   }
 
@@ -495,6 +540,9 @@ class ReimbursementSheetsCompanion extends UpdateCompanion<ReimbursementSheet> {
     if (updatedAt.present) {
       map['updated_at'] = Variable<DateTime>(updatedAt.value);
     }
+    if (deletedAt.present) {
+      map['deleted_at'] = Variable<DateTime>(deletedAt.value);
+    }
     return map;
   }
 
@@ -508,7 +556,8 @@ class ReimbursementSheetsCompanion extends UpdateCompanion<ReimbursementSheet> {
           ..write('submittedAt: $submittedAt, ')
           ..write('reimbursedAt: $reimbursedAt, ')
           ..write('createdAt: $createdAt, ')
-          ..write('updatedAt: $updatedAt')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deletedAt: $deletedAt')
           ..write(')'))
         .toString();
   }
@@ -660,6 +709,17 @@ class $TicketsTable extends Tickets with TableInfo<$TicketsTable, Ticket> {
     requiredDuringInsert: false,
     defaultValue: currentDateAndTime,
   );
+  static const VerificationMeta _deletedAtMeta = const VerificationMeta(
+    'deletedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> deletedAt = GeneratedColumn<DateTime>(
+    'deleted_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -675,6 +735,7 @@ class $TicketsTable extends Tickets with TableInfo<$TicketsTable, Ticket> {
     reimbursementSheetId,
     createdAt,
     updatedAt,
+    deletedAt,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -779,6 +840,12 @@ class $TicketsTable extends Tickets with TableInfo<$TicketsTable, Ticket> {
         updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
       );
     }
+    if (data.containsKey('deleted_at')) {
+      context.handle(
+        _deletedAtMeta,
+        deletedAt.isAcceptableOrUnknown(data['deleted_at']!, _deletedAtMeta),
+      );
+    }
     return context;
   }
 
@@ -840,6 +907,10 @@ class $TicketsTable extends Tickets with TableInfo<$TicketsTable, Ticket> {
         DriftSqlType.dateTime,
         data['${effectivePrefix}updated_at'],
       )!,
+      deletedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}deleted_at'],
+      ),
     );
   }
 
@@ -863,6 +934,7 @@ class Ticket extends DataClass implements Insertable<Ticket> {
   final int? reimbursementSheetId;
   final DateTime createdAt;
   final DateTime updatedAt;
+  final DateTime? deletedAt;
   const Ticket({
     required this.id,
     required this.title,
@@ -877,6 +949,7 @@ class Ticket extends DataClass implements Insertable<Ticket> {
     this.reimbursementSheetId,
     required this.createdAt,
     required this.updatedAt,
+    this.deletedAt,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -904,6 +977,9 @@ class Ticket extends DataClass implements Insertable<Ticket> {
     }
     map['created_at'] = Variable<DateTime>(createdAt);
     map['updated_at'] = Variable<DateTime>(updatedAt);
+    if (!nullToAbsent || deletedAt != null) {
+      map['deleted_at'] = Variable<DateTime>(deletedAt);
+    }
     return map;
   }
 
@@ -930,6 +1006,9 @@ class Ticket extends DataClass implements Insertable<Ticket> {
           : Value(reimbursementSheetId),
       createdAt: Value(createdAt),
       updatedAt: Value(updatedAt),
+      deletedAt: deletedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(deletedAt),
     );
   }
 
@@ -954,6 +1033,7 @@ class Ticket extends DataClass implements Insertable<Ticket> {
       ),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
       updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
+      deletedAt: serializer.fromJson<DateTime?>(json['deletedAt']),
     );
   }
   @override
@@ -973,6 +1053,7 @@ class Ticket extends DataClass implements Insertable<Ticket> {
       'reimbursementSheetId': serializer.toJson<int?>(reimbursementSheetId),
       'createdAt': serializer.toJson<DateTime>(createdAt),
       'updatedAt': serializer.toJson<DateTime>(updatedAt),
+      'deletedAt': serializer.toJson<DateTime?>(deletedAt),
     };
   }
 
@@ -990,6 +1071,7 @@ class Ticket extends DataClass implements Insertable<Ticket> {
     Value<int?> reimbursementSheetId = const Value.absent(),
     DateTime? createdAt,
     DateTime? updatedAt,
+    Value<DateTime?> deletedAt = const Value.absent(),
   }) => Ticket(
     id: id ?? this.id,
     title: title ?? this.title,
@@ -1006,6 +1088,7 @@ class Ticket extends DataClass implements Insertable<Ticket> {
         : this.reimbursementSheetId,
     createdAt: createdAt ?? this.createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
+    deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
   );
   Ticket copyWithCompanion(TicketsCompanion data) {
     return Ticket(
@@ -1028,6 +1111,7 @@ class Ticket extends DataClass implements Insertable<Ticket> {
           : this.reimbursementSheetId,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+      deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
     );
   }
 
@@ -1046,7 +1130,8 @@ class Ticket extends DataClass implements Insertable<Ticket> {
           ..write('fileType: $fileType, ')
           ..write('reimbursementSheetId: $reimbursementSheetId, ')
           ..write('createdAt: $createdAt, ')
-          ..write('updatedAt: $updatedAt')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deletedAt: $deletedAt')
           ..write(')'))
         .toString();
   }
@@ -1066,6 +1151,7 @@ class Ticket extends DataClass implements Insertable<Ticket> {
     reimbursementSheetId,
     createdAt,
     updatedAt,
+    deletedAt,
   );
   @override
   bool operator ==(Object other) =>
@@ -1083,7 +1169,8 @@ class Ticket extends DataClass implements Insertable<Ticket> {
           other.fileType == this.fileType &&
           other.reimbursementSheetId == this.reimbursementSheetId &&
           other.createdAt == this.createdAt &&
-          other.updatedAt == this.updatedAt);
+          other.updatedAt == this.updatedAt &&
+          other.deletedAt == this.deletedAt);
 }
 
 class TicketsCompanion extends UpdateCompanion<Ticket> {
@@ -1100,6 +1187,7 @@ class TicketsCompanion extends UpdateCompanion<Ticket> {
   final Value<int?> reimbursementSheetId;
   final Value<DateTime> createdAt;
   final Value<DateTime> updatedAt;
+  final Value<DateTime?> deletedAt;
   const TicketsCompanion({
     this.id = const Value.absent(),
     this.title = const Value.absent(),
@@ -1114,6 +1202,7 @@ class TicketsCompanion extends UpdateCompanion<Ticket> {
     this.reimbursementSheetId = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
+    this.deletedAt = const Value.absent(),
   });
   TicketsCompanion.insert({
     this.id = const Value.absent(),
@@ -1129,6 +1218,7 @@ class TicketsCompanion extends UpdateCompanion<Ticket> {
     this.reimbursementSheetId = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
+    this.deletedAt = const Value.absent(),
   }) : title = Value(title),
        amountInCents = Value(amountInCents),
        occurredOn = Value(occurredOn),
@@ -1148,6 +1238,7 @@ class TicketsCompanion extends UpdateCompanion<Ticket> {
     Expression<int>? reimbursementSheetId,
     Expression<DateTime>? createdAt,
     Expression<DateTime>? updatedAt,
+    Expression<DateTime>? deletedAt,
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
@@ -1164,6 +1255,7 @@ class TicketsCompanion extends UpdateCompanion<Ticket> {
         'reimbursement_sheet_id': reimbursementSheetId,
       if (createdAt != null) 'created_at': createdAt,
       if (updatedAt != null) 'updated_at': updatedAt,
+      if (deletedAt != null) 'deleted_at': deletedAt,
     });
   }
 
@@ -1181,6 +1273,7 @@ class TicketsCompanion extends UpdateCompanion<Ticket> {
     Value<int?>? reimbursementSheetId,
     Value<DateTime>? createdAt,
     Value<DateTime>? updatedAt,
+    Value<DateTime?>? deletedAt,
   }) {
     return TicketsCompanion(
       id: id ?? this.id,
@@ -1196,6 +1289,7 @@ class TicketsCompanion extends UpdateCompanion<Ticket> {
       reimbursementSheetId: reimbursementSheetId ?? this.reimbursementSheetId,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      deletedAt: deletedAt ?? this.deletedAt,
     );
   }
 
@@ -1241,6 +1335,9 @@ class TicketsCompanion extends UpdateCompanion<Ticket> {
     if (updatedAt.present) {
       map['updated_at'] = Variable<DateTime>(updatedAt.value);
     }
+    if (deletedAt.present) {
+      map['deleted_at'] = Variable<DateTime>(deletedAt.value);
+    }
     return map;
   }
 
@@ -1259,7 +1356,8 @@ class TicketsCompanion extends UpdateCompanion<Ticket> {
           ..write('fileType: $fileType, ')
           ..write('reimbursementSheetId: $reimbursementSheetId, ')
           ..write('createdAt: $createdAt, ')
-          ..write('updatedAt: $updatedAt')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deletedAt: $deletedAt')
           ..write(')'))
         .toString();
   }
@@ -2091,6 +2189,7 @@ typedef $$ReimbursementSheetsTableCreateCompanionBuilder =
       Value<DateTime?> reimbursedAt,
       Value<DateTime> createdAt,
       Value<DateTime> updatedAt,
+      Value<DateTime?> deletedAt,
     });
 typedef $$ReimbursementSheetsTableUpdateCompanionBuilder =
     ReimbursementSheetsCompanion Function({
@@ -2102,6 +2201,7 @@ typedef $$ReimbursementSheetsTableUpdateCompanionBuilder =
       Value<DateTime?> reimbursedAt,
       Value<DateTime> createdAt,
       Value<DateTime> updatedAt,
+      Value<DateTime?> deletedAt,
     });
 
 final class $$ReimbursementSheetsTableReferences
@@ -2188,6 +2288,11 @@ class $$ReimbursementSheetsTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
+  ColumnFilters<DateTime> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
   Expression<bool> ticketsRefs(
     Expression<bool> Function($$TicketsTableFilterComposer f) f,
   ) {
@@ -2262,6 +2367,11 @@ class $$ReimbursementSheetsTableOrderingComposer
     column: $table.updatedAt,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<DateTime> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$ReimbursementSheetsTableAnnotationComposer
@@ -2302,6 +2412,9 @@ class $$ReimbursementSheetsTableAnnotationComposer
 
   GeneratedColumn<DateTime> get updatedAt =>
       $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get deletedAt =>
+      $composableBuilder(column: $table.deletedAt, builder: (column) => column);
 
   Expression<T> ticketsRefs<T extends Object>(
     Expression<T> Function($$TicketsTableAnnotationComposer a) f,
@@ -2373,6 +2486,7 @@ class $$ReimbursementSheetsTableTableManager
                 Value<DateTime?> reimbursedAt = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
                 Value<DateTime> updatedAt = const Value.absent(),
+                Value<DateTime?> deletedAt = const Value.absent(),
               }) => ReimbursementSheetsCompanion(
                 id: id,
                 title: title,
@@ -2382,6 +2496,7 @@ class $$ReimbursementSheetsTableTableManager
                 reimbursedAt: reimbursedAt,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
+                deletedAt: deletedAt,
               ),
           createCompanionCallback:
               ({
@@ -2393,6 +2508,7 @@ class $$ReimbursementSheetsTableTableManager
                 Value<DateTime?> reimbursedAt = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
                 Value<DateTime> updatedAt = const Value.absent(),
+                Value<DateTime?> deletedAt = const Value.absent(),
               }) => ReimbursementSheetsCompanion.insert(
                 id: id,
                 title: title,
@@ -2402,6 +2518,7 @@ class $$ReimbursementSheetsTableTableManager
                 reimbursedAt: reimbursedAt,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
+                deletedAt: deletedAt,
               ),
           withReferenceMapper: (p0) => p0
               .map(
@@ -2476,6 +2593,7 @@ typedef $$TicketsTableCreateCompanionBuilder =
       Value<int?> reimbursementSheetId,
       Value<DateTime> createdAt,
       Value<DateTime> updatedAt,
+      Value<DateTime?> deletedAt,
     });
 typedef $$TicketsTableUpdateCompanionBuilder =
     TicketsCompanion Function({
@@ -2492,6 +2610,7 @@ typedef $$TicketsTableUpdateCompanionBuilder =
       Value<int?> reimbursementSheetId,
       Value<DateTime> createdAt,
       Value<DateTime> updatedAt,
+      Value<DateTime?> deletedAt,
     });
 
 final class $$TicketsTableReferences
@@ -2608,6 +2727,11 @@ class $$TicketsTableFilterComposer
 
   ColumnFilters<DateTime> get updatedAt => $composableBuilder(
     column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -2729,6 +2853,11 @@ class $$TicketsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<DateTime> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   $$ReimbursementSheetsTableOrderingComposer get reimbursementSheetId {
     final $$ReimbursementSheetsTableOrderingComposer composer =
         $composerBuilder(
@@ -2802,6 +2931,9 @@ class $$TicketsTableAnnotationComposer
 
   GeneratedColumn<DateTime> get updatedAt =>
       $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get deletedAt =>
+      $composableBuilder(column: $table.deletedAt, builder: (column) => column);
 
   $$ReimbursementSheetsTableAnnotationComposer get reimbursementSheetId {
     final $$ReimbursementSheetsTableAnnotationComposer composer =
@@ -2897,6 +3029,7 @@ class $$TicketsTableTableManager
                 Value<int?> reimbursementSheetId = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
                 Value<DateTime> updatedAt = const Value.absent(),
+                Value<DateTime?> deletedAt = const Value.absent(),
               }) => TicketsCompanion(
                 id: id,
                 title: title,
@@ -2911,6 +3044,7 @@ class $$TicketsTableTableManager
                 reimbursementSheetId: reimbursementSheetId,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
+                deletedAt: deletedAt,
               ),
           createCompanionCallback:
               ({
@@ -2927,6 +3061,7 @@ class $$TicketsTableTableManager
                 Value<int?> reimbursementSheetId = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
                 Value<DateTime> updatedAt = const Value.absent(),
+                Value<DateTime?> deletedAt = const Value.absent(),
               }) => TicketsCompanion.insert(
                 id: id,
                 title: title,
@@ -2941,6 +3076,7 @@ class $$TicketsTableTableManager
                 reimbursementSheetId: reimbursementSheetId,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
+                deletedAt: deletedAt,
               ),
           withReferenceMapper: (p0) => p0
               .map(

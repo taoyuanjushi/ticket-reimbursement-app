@@ -18,6 +18,7 @@ class HomePage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final workbenchAsync = ref.watch(homeWorkbenchProvider);
+    final selectedRange = ref.watch(homeDashboardRangeProvider);
 
     return RefreshIndicator(
       onRefresh: () async {
@@ -43,7 +44,13 @@ class HomePage extends ConsumerWidget {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _SummarySection(data: data),
+                  _SummarySection(
+                    data: data,
+                    selectedRange: selectedRange,
+                    onRangeChanged: (range) => ref
+                        .read(homeDashboardRangeProvider.notifier)
+                        .setRange(range),
+                  ),
                   const SizedBox(height: 24),
                   _RecentTicketsSection(
                     tickets: data.recentTickets,
@@ -201,7 +208,7 @@ class _WorkbenchHeroCard extends StatelessWidget {
                     Text('先处理今天要整理的票据', style: theme.textTheme.headlineSmall),
                     const SizedBox(height: 8),
                     Text(
-                      '在这里看待报销数量、最近票据和最近报销单。',
+                      '在这里先看本月票据、待报销金额和最近记录。',
                       style: theme.textTheme.bodyLarge?.copyWith(
                         color: colors.onSurfaceVariant,
                       ),
@@ -258,41 +265,94 @@ class _WorkbenchHeroCard extends StatelessWidget {
 }
 
 class _SummarySection extends StatelessWidget {
-  const _SummarySection({required this.data});
+  const _SummarySection({
+    required this.data,
+    required this.selectedRange,
+    required this.onRangeChanged,
+  });
 
   final HomeWorkbenchData data;
+  final HomeDashboardRange selectedRange;
+  final ValueChanged<HomeDashboardRange> onRangeChanged;
 
   @override
   Widget build(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const AppSectionHeader(title: '工作概览', subtitle: '先看数量，再继续处理'),
+        AppSectionHeader(
+          title: '工作概览',
+          subtitle: '统计范围：${homeDashboardRangeLabel(selectedRange)}',
+        ),
+        const SizedBox(height: 12),
+        _DashboardRangeSelector(
+          selectedRange: selectedRange,
+          onChanged: onRangeChanged,
+        ),
         const SizedBox(height: 14),
         Wrap(
           spacing: 12,
           runSpacing: 12,
           children: [
             _SummaryCard(
-              key: const ValueKey('home-summary-total-tickets'),
+              key: const ValueKey('home-summary-ticket-count'),
               icon: Icons.receipt_long_rounded,
-              label: '全部票据',
+              label: '票据数量',
               value: '${data.ticketCount}',
             ),
             _SummaryCard(
               key: const ValueKey('home-summary-pending-tickets'),
               icon: Icons.schedule_rounded,
-              label: '待报销',
+              label: '待报销票据数量',
               value: '${data.pendingTicketCount}',
             ),
             _SummaryCard(
-              key: const ValueKey('home-summary-reimbursement-sheets'),
+              key: const ValueKey('home-summary-ticket-amount'),
+              icon: Icons.payments_rounded,
+              label: '票据总金额',
+              value: formatTicketAmount(data.ticketAmountInCents),
+            ),
+            _SummaryCard(
+              key: const ValueKey('home-summary-pending-amount'),
               icon: Icons.account_balance_wallet_rounded,
-              label: '报销单',
+              label: '待报销金额',
+              value: formatTicketAmount(data.pendingTicketAmountInCents),
+            ),
+            _SummaryCard(
+              key: const ValueKey('home-summary-reimbursement-sheets'),
+              icon: Icons.note_alt_rounded,
+              label: '报销单数量',
               value: '${data.reimbursementSheetCount}',
             ),
           ],
         ),
+      ],
+    );
+  }
+}
+
+class _DashboardRangeSelector extends StatelessWidget {
+  const _DashboardRangeSelector({
+    required this.selectedRange,
+    required this.onChanged,
+  });
+
+  final HomeDashboardRange selectedRange;
+  final ValueChanged<HomeDashboardRange> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final range in HomeDashboardRange.values)
+          ChoiceChip(
+            key: ValueKey('home-range-${range.name}'),
+            label: Text(homeDashboardRangeLabel(range)),
+            selected: selectedRange == range,
+            onSelected: (_) => onChanged(range),
+          ),
       ],
     );
   }

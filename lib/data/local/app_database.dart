@@ -23,6 +23,8 @@ class ReimbursementSheets extends Table {
   DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
 
   DateTimeColumn get updatedAt => dateTime().withDefault(currentDateAndTime)();
+
+  DateTimeColumn get deletedAt => dateTime().nullable()();
 }
 
 class Tickets extends Table {
@@ -55,6 +57,8 @@ class Tickets extends Table {
   DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
 
   DateTimeColumn get updatedAt => dateTime().withDefault(currentDateAndTime)();
+
+  DateTimeColumn get deletedAt => dateTime().nullable()();
 }
 
 class Tags extends Table {
@@ -102,7 +106,7 @@ class AppDatabase extends _$AppDatabase {
   }
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -113,6 +117,15 @@ class AppDatabase extends _$AppDatabase {
       if (from < 2) {
         await migrator.addColumn(tickets, tickets.fileName);
         await migrator.addColumn(tickets, tickets.fileType);
+      }
+      if (from < 3) {
+        await migrator.addColumn(tickets, tickets.deletedAt);
+      }
+      if (from < 4) {
+        await migrator.addColumn(
+          reimbursementSheets,
+          reimbursementSheets.deletedAt,
+        );
       }
     },
     beforeOpen: (details) async {

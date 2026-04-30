@@ -5,6 +5,7 @@ import 'package:ticket_box/data/providers/database_providers.dart';
 import 'package:ticket_box/data/repositories/ticket_repository.dart';
 import 'package:ticket_box/features/reimbursements/reimbursement_providers.dart';
 import 'package:ticket_box/features/reimbursements/reimbursement_support.dart';
+import 'package:ticket_box/features/tags/tag_providers.dart';
 import 'package:ticket_box/features/tickets/ticket_detail_page.dart';
 import 'package:ticket_box/features/tickets/ticket_form_page.dart';
 import 'package:ticket_box/features/tickets/ticket_providers.dart';
@@ -44,11 +45,27 @@ class _TicketsPageState extends ConsumerState<TicketsPage> {
     final selectedStatus = ref.watch(ticketStatusFilterProvider);
     final selectedType = ref.watch(ticketTypeFilterProvider);
     final selectedMonth = ref.watch(ticketMonthFilterProvider);
+    final selectedTagId = ref.watch(ticketTagFilterProvider);
     final sortField = ref.watch(ticketSortFieldProvider);
     final sortDirection = ref.watch(ticketSortDirectionProvider);
+    final tagsAsync = ref.watch(tagListProvider);
     final selectionState = ref.watch(ticketSelectionProvider);
     final hasFilters =
-        selectedStatus != null || selectedType != null || selectedMonth != null;
+        selectedStatus != null ||
+        selectedType != null ||
+        selectedMonth != null ||
+        selectedTagId != null;
+    final selectedTagLabel = tagsAsync.maybeWhen(
+      data: (tags) {
+        for (final tag in tags) {
+          if (tag.id == selectedTagId) {
+            return tag.name;
+          }
+        }
+        return null;
+      },
+      orElse: () => null,
+    );
     final hasSearchOrFilter = ref.watch(ticketHasSearchOrFilterProvider);
     final shouldShowResults = ref.watch(ticketArchiveResultsVisibleProvider);
     final isShowingAll = ref.watch(ticketShowAllProvider) && !hasSearchOrFilter;
@@ -82,6 +99,8 @@ class _TicketsPageState extends ConsumerState<TicketsPage> {
             selectedStatus: selectedStatus,
             selectedType: selectedType,
             selectedMonth: selectedMonth,
+            tagsAsync: tagsAsync,
+            selectedTagId: selectedTagId,
             selectedSortField: sortField,
             selectedSortDirection: sortDirection,
             hasActiveCriteria: shouldShowResults,
@@ -89,6 +108,7 @@ class _TicketsPageState extends ConsumerState<TicketsPage> {
             onSearchCleared: _clearSearchQuery,
             onStatusChanged: _updateStatusFilter,
             onTypeChanged: _updateTypeFilter,
+            onTagChanged: _updateTagFilter,
             onSortFieldChanged: _updateSortField,
             onSortDirectionChanged: _updateSortDirection,
             onMonthPressed: () => _pickMonth(context, ref, selectedMonth),
@@ -164,6 +184,7 @@ class _TicketsPageState extends ConsumerState<TicketsPage> {
                     searchQuery: searchQuery.trim(),
                     hasFilters: hasFilters,
                     isShowingAll: isShowingAll,
+                    selectedTagLabel: selectedTagLabel,
                     sortField: sortField,
                     sortDirection: sortDirection,
                   ),
@@ -284,6 +305,11 @@ class _TicketsPageState extends ConsumerState<TicketsPage> {
     ref.read(ticketTypeFilterProvider.notifier).setFilter(value);
   }
 
+  void _updateTagFilter(int? value) {
+    _clearSelectedForCriteriaChange();
+    ref.read(ticketTagFilterProvider.notifier).setFilter(value);
+  }
+
   void _updateSortField(TicketSortField? value) {
     if (value == null) {
       return;
@@ -310,6 +336,7 @@ class _TicketsPageState extends ConsumerState<TicketsPage> {
     ref.read(ticketStatusFilterProvider.notifier).setFilter(null);
     ref.read(ticketTypeFilterProvider.notifier).setFilter(null);
     ref.read(ticketMonthFilterProvider.notifier).setFilter(null);
+    ref.read(ticketTagFilterProvider.notifier).setFilter(null);
     if (!ref.read(ticketSelectionProvider).enabled) {
       ref.read(ticketShowAllProvider.notifier).hide();
     }
@@ -494,7 +521,7 @@ class _TicketsPageState extends ConsumerState<TicketsPage> {
       builder: (dialogContext) {
         return AlertDialog(
           title: const Text('批量删除票据'),
-          content: Text('已选 ${selectedIds.length} 张票据，删除后本地附件也会一起移除。'),
+          content: Text('已选 ${selectedIds.length} 张票据，将移入回收站，附件不会立即删除。'),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(false),
@@ -502,7 +529,7 @@ class _TicketsPageState extends ConsumerState<TicketsPage> {
             ),
             FilledButton(
               onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('删除'),
+              child: const Text('移入回收站'),
             ),
           ],
         );
@@ -518,11 +545,6 @@ class _TicketsPageState extends ConsumerState<TicketsPage> {
           .read(ticketRepositoryProvider)
           .getTicketsByIds(selectedIds);
       await ref.read(ticketRepositoryProvider).deleteTickets(selectedIds);
-
-      final fileService = ref.read(ticketFileServiceProvider);
-      for (final ticket in selectedTickets) {
-        await fileService.deleteStoredFile(ticket.filePath);
-      }
 
       ref.invalidate(ticketListProvider);
       ref.invalidate(ticketRecentListProvider);
@@ -540,9 +562,9 @@ class _TicketsPageState extends ConsumerState<TicketsPage> {
         return;
       }
 
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('已删除 ${selectedIds.length} 张票据')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已移入回收站 ${selectedIds.length} 张票据')),
+      );
     } catch (_) {
       if (!mounted) {
         return;
@@ -550,7 +572,7 @@ class _TicketsPageState extends ConsumerState<TicketsPage> {
 
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('批量删除失败，请稍后重试')));
+      ).showSnackBar(const SnackBar(content: Text('批量移入回收站失败，请稍后重试')));
     }
   }
 }
@@ -630,6 +652,8 @@ class _ArchiveSearchCard extends StatelessWidget {
     required this.selectedStatus,
     required this.selectedType,
     required this.selectedMonth,
+    required this.tagsAsync,
+    required this.selectedTagId,
     required this.selectedSortField,
     required this.selectedSortDirection,
     required this.hasActiveCriteria,
@@ -637,6 +661,7 @@ class _ArchiveSearchCard extends StatelessWidget {
     required this.onSearchCleared,
     required this.onStatusChanged,
     required this.onTypeChanged,
+    required this.onTagChanged,
     required this.onSortFieldChanged,
     required this.onSortDirectionChanged,
     required this.onMonthPressed,
@@ -648,6 +673,8 @@ class _ArchiveSearchCard extends StatelessWidget {
   final String? selectedStatus;
   final String? selectedType;
   final DateTime? selectedMonth;
+  final AsyncValue<List<Tag>> tagsAsync;
+  final int? selectedTagId;
   final TicketSortField selectedSortField;
   final TicketSortDirection selectedSortDirection;
   final bool hasActiveCriteria;
@@ -655,6 +682,7 @@ class _ArchiveSearchCard extends StatelessWidget {
   final VoidCallback onSearchCleared;
   final ValueChanged<String?> onStatusChanged;
   final ValueChanged<String?> onTypeChanged;
+  final ValueChanged<int?> onTagChanged;
   final ValueChanged<TicketSortField?> onSortFieldChanged;
   final ValueChanged<TicketSortDirection?> onSortDirectionChanged;
   final VoidCallback onMonthPressed;
@@ -753,6 +781,12 @@ class _ArchiveSearchCard extends StatelessWidget {
             },
           ),
           const SizedBox(height: 12),
+          _TagFilterField(
+            tagsAsync: tagsAsync,
+            selectedTagId: selectedTagId,
+            onChanged: onTagChanged,
+          ),
+          const SizedBox(height: 12),
           OutlinedButton.icon(
             onPressed: onMonthPressed,
             icon: const Icon(Icons.calendar_month_outlined),
@@ -815,6 +849,90 @@ class _ArchiveSearchCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _TagFilterField extends StatelessWidget {
+  const _TagFilterField({
+    required this.tagsAsync,
+    required this.selectedTagId,
+    required this.onChanged,
+  });
+
+  final AsyncValue<List<Tag>> tagsAsync;
+  final int? selectedTagId;
+  final ValueChanged<int?> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+
+    return tagsAsync.when(
+      data: (tags) {
+        final hasSelectedTag =
+            selectedTagId != null && tags.any((tag) => tag.id == selectedTagId);
+        final items = <DropdownMenuItem<int?>>[
+          const DropdownMenuItem<int?>(value: null, child: Text('全部标签')),
+          if (selectedTagId != null && !hasSelectedTag)
+            DropdownMenuItem<int?>(
+              value: selectedTagId,
+              child: const Text('已删除标签'),
+            ),
+          for (final tag in tags)
+            DropdownMenuItem<int?>(value: tag.id, child: Text(tag.name)),
+        ];
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            DropdownButtonFormField<int?>(
+              key: const ValueKey('ticket-tag-filter-input'),
+              initialValue: selectedTagId,
+              decoration: const InputDecoration(labelText: '标签'),
+              items: items,
+              onChanged: onChanged,
+            ),
+            if (tags.isEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                '还没有标签，可先在设置中创建。',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: colors.onSurfaceVariant),
+              ),
+            ] else if (selectedTagId != null && !hasSelectedTag) ...[
+              const SizedBox(height: 8),
+              Text(
+                '当前标签已不存在，可改选其他标签。',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: colors.onSurfaceVariant),
+              ),
+            ],
+          ],
+        );
+      },
+      loading: () => DropdownButtonFormField<int?>(
+        key: const ValueKey('ticket-tag-filter-input'),
+        initialValue: null,
+        decoration: const InputDecoration(labelText: '标签'),
+        items: const [
+          DropdownMenuItem<int?>(value: null, child: Text('加载中...')),
+        ],
+        onChanged: null,
+      ),
+      error: (error, stackTrace) {
+        return DropdownButtonFormField<int?>(
+          key: const ValueKey('ticket-tag-filter-input'),
+          initialValue: null,
+          decoration: const InputDecoration(labelText: '标签'),
+          items: const [
+            DropdownMenuItem<int?>(value: null, child: Text('加载失败')),
+          ],
+          onChanged: null,
+        );
+      },
     );
   }
 }
@@ -992,6 +1110,7 @@ class _SectionHeader extends StatelessWidget {
     required this.searchQuery,
     required this.hasFilters,
     required this.isShowingAll,
+    required this.selectedTagLabel,
     required this.sortField,
     required this.sortDirection,
   });
@@ -1000,6 +1119,7 @@ class _SectionHeader extends StatelessWidget {
   final String searchQuery;
   final bool hasFilters;
   final bool isShowingAll;
+  final String? selectedTagLabel;
   final TicketSortField sortField;
   final TicketSortDirection sortDirection;
 
@@ -1017,7 +1137,10 @@ class _SectionHeader extends StatelessWidget {
     if (searchQuery.isNotEmpty) {
       parts.add('关键词：$searchQuery');
     }
-    if (hasFilters) {
+    if (selectedTagLabel != null) {
+      parts.add('标签：$selectedTagLabel');
+    }
+    if (hasFilters && selectedTagLabel == null) {
       parts.add('已筛选');
     }
     if (isShowingAll) {
