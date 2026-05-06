@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:archive/archive.dart';
@@ -111,6 +112,90 @@ void main() {
     );
   });
 
+  test('missing backup metadata is rejected', () async {
+    final tempDirectory = await Directory.systemTemp.createTemp(
+      'ticket_box_missing_metadata_backup_test',
+    );
+    addTearDown(() async {
+      if (await tempDirectory.exists()) {
+        await tempDirectory.delete(recursive: true);
+      }
+    });
+
+    final archive = Archive()
+      ..addFile(ArchiveFile.string('database/ticket_box.sqlite', 'database'));
+    final backupFile = File(path.join(tempDirectory.path, 'missing.zip'));
+    await backupFile.writeAsBytes(ZipEncoder().encode(archive));
+
+    final restoreService = _buildRestoreService(tempDirectory);
+
+    await expectLater(
+      () => restoreService.inspectBackup(backupFile.path),
+      throwsA(
+        isA<LocalBackupValidationException>().having(
+          (error) => error.message,
+          'message',
+          '备份中缺少元数据文件',
+        ),
+      ),
+    );
+  });
+
+  test('unsupported backup format version is rejected', () async {
+    final tempDirectory = await Directory.systemTemp.createTemp(
+      'ticket_box_unsupported_backup_test',
+    );
+    addTearDown(() async {
+      if (await tempDirectory.exists()) {
+        await tempDirectory.delete(recursive: true);
+      }
+    });
+
+    final archive = Archive()
+      ..addFile(_metadataFile(version: localBackupFormatVersion + 1))
+      ..addFile(ArchiveFile.string('database/ticket_box.sqlite', 'database'));
+    final backupFile = File(path.join(tempDirectory.path, 'unsupported.zip'));
+    await backupFile.writeAsBytes(ZipEncoder().encode(archive));
+
+    final restoreService = _buildRestoreService(tempDirectory);
+
+    await expectLater(
+      () => restoreService.inspectBackup(backupFile.path),
+      throwsA(
+        isA<LocalBackupValidationException>().having(
+          (error) => error.message,
+          'message',
+          '备份格式版本不支持',
+        ),
+      ),
+    );
+  });
+
+  test('malicious zip path traversal entry is rejected', () async {
+    final tempDirectory = await Directory.systemTemp.createTemp(
+      'ticket_box_malicious_backup_test',
+    );
+    addTearDown(() async {
+      if (await tempDirectory.exists()) {
+        await tempDirectory.delete(recursive: true);
+      }
+    });
+
+    final archive = Archive()
+      ..addFile(_metadataFile())
+      ..addFile(ArchiveFile.string('database/ticket_box.sqlite', 'database'))
+      ..addFile(ArchiveFile.string('attachments/../evil.txt', 'evil'));
+    final backupFile = File(path.join(tempDirectory.path, 'malicious.zip'));
+    await backupFile.writeAsBytes(ZipEncoder().encode(archive));
+
+    final restoreService = _buildRestoreService(tempDirectory);
+
+    await expectLater(
+      () => restoreService.inspectBackup(backupFile.path),
+      throwsA(isA<LocalBackupValidationException>()),
+    );
+  });
+
   test('invalid backup zip does not modify current local data', () async {
     final tempDirectory = await Directory.systemTemp.createTemp(
       'ticket_box_invalid_backup_restore_test',
@@ -158,4 +243,36 @@ void main() {
     expect(await liveDatabaseFile.readAsString(), 'live-database');
     expect(await liveAttachmentFile.readAsString(), 'keep-me');
   });
+}
+
+LocalBackupRestoreService _buildRestoreService(Directory tempDirectory) {
+  final liveDirectory = Directory(path.join(tempDirectory.path, 'live'));
+  final liveAttachmentsDirectory = Directory(
+    path.join(liveDirectory.path, 'ticket_attachments'),
+  );
+  return LocalBackupRestoreService(
+    ticketFileService: _FakeTicketFileService(liveAttachmentsDirectory),
+    databasePathResolver: () async =>
+        path.join(liveDirectory.path, 'ticket_box.sqlite'),
+    workingDirectoryBuilder: () async =>
+        Directory(path.join(tempDirectory.path, 'working')),
+  );
+}
+
+ArchiveFile _metadataFile({int version = localBackupFormatVersion}) {
+  final metadataBytes = utf8.encode(
+    jsonEncode({
+      'appName': '票据盒',
+      'backupFormatVersion': version,
+      'createdAt': '2026-04-30T00:00:00.000',
+      'databaseFileEntry': 'database/ticket_box.sqlite',
+      'attachmentFileCount': 0,
+    }),
+  );
+
+  return ArchiveFile(
+    localBackupMetadataFileName,
+    metadataBytes.length,
+    metadataBytes,
+  );
 }

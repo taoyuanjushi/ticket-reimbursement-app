@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:archive/archive.dart';
@@ -67,8 +68,19 @@ void main() {
     );
     final archivedNames = archive.files.map((file) => file.name).toSet();
 
+    final metadataEntry = archive.files.singleWhere(
+      (file) => file.name == localBackupMetadataFileName,
+    );
+    final metadata = jsonDecode(utf8.decode(metadataEntry.content));
+
+    expect(archivedNames, contains(localBackupMetadataFileName));
     expect(archivedNames, contains('database/ticket_box.sqlite'));
     expect(archivedNames, contains('attachments/receipt.jpg'));
     expect(archivedNames, contains('attachments/nested/invoice.pdf'));
+    expect(metadata['appName'], '票据盒');
+    expect(metadata['backupFormatVersion'], localBackupFormatVersion);
+    expect(metadata['databaseFileEntry'], 'database/ticket_box.sqlite');
+    expect(metadata['attachmentFileCount'], 2);
+    expect(metadata['createdAt'], isA<String>());
   });
 }

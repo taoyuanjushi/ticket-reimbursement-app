@@ -9,10 +9,14 @@ import 'package:ticket_box/features/inspections/ticket_completeness_inspection_p
 import 'package:ticket_box/features/reminders/reminder_providers.dart';
 import 'package:ticket_box/features/reminders/reminder_support.dart';
 import 'package:ticket_box/features/reimbursements/reimbursement_providers.dart';
+import 'package:ticket_box/features/settings/about_page.dart';
+import 'package:ticket_box/features/settings/feedback_page.dart';
+import 'package:ticket_box/features/settings/help_page.dart';
 import 'package:ticket_box/features/settings/local_maintenance_providers.dart';
 import 'package:ticket_box/features/settings/local_backup_export_service.dart';
 import 'package:ticket_box/features/settings/local_backup_restore_service.dart';
 import 'package:ticket_box/features/settings/local_maintenance_service.dart';
+import 'package:ticket_box/features/settings/privacy_page.dart';
 import 'package:ticket_box/features/settings/ticket_recycle_bin_page.dart';
 import 'package:ticket_box/features/tags/tag_management_page.dart';
 import 'package:ticket_box/features/tickets/ticket_providers.dart';
@@ -62,6 +66,46 @@ class SettingsPage extends ConsumerWidget {
                     ),
                   ),
                 ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 24),
+        const AppSectionHeader(title: '应用信息', subtitle: '查看版本和本地优先说明'),
+        const SizedBox(height: 12),
+        AppSurfaceCard(
+          child: Column(
+            children: [
+              _SettingsNavigationTile(
+                icon: Icons.info_outline_rounded,
+                title: '关于票据盒',
+                subtitle: '版本信息和本地数据说明',
+                onTap: () => _openAboutPage(context),
+                colors: colors,
+              ),
+              const Divider(height: 24),
+              _SettingsNavigationTile(
+                icon: Icons.privacy_tip_outlined,
+                title: '隐私说明',
+                subtitle: '本地数据、附件和备份说明',
+                onTap: () => _openPrivacyPage(context),
+                colors: colors,
+              ),
+              const Divider(height: 24),
+              _SettingsNavigationTile(
+                icon: Icons.help_outline_rounded,
+                title: '使用帮助',
+                subtitle: '查看票据、报销和备份流程',
+                onTap: () => _openHelpPage(context),
+                colors: colors,
+              ),
+              const Divider(height: 24),
+              _SettingsNavigationTile(
+                icon: Icons.feedback_outlined,
+                title: '问题反馈',
+                subtitle: '复制诊断信息，手动反馈问题',
+                onTap: () => _openFeedbackPage(context),
+                colors: colors,
               ),
             ],
           ),
@@ -206,6 +250,30 @@ class SettingsPage extends ConsumerWidget {
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(builder: (_) => const TagManagementPage()),
     );
+  }
+
+  Future<void> _openAboutPage(BuildContext context) async {
+    await Navigator.of(
+      context,
+    ).push<void>(MaterialPageRoute<void>(builder: (_) => const AboutPage()));
+  }
+
+  Future<void> _openPrivacyPage(BuildContext context) async {
+    await Navigator.of(
+      context,
+    ).push<void>(MaterialPageRoute<void>(builder: (_) => const PrivacyPage()));
+  }
+
+  Future<void> _openHelpPage(BuildContext context) async {
+    await Navigator.of(
+      context,
+    ).push<void>(MaterialPageRoute<void>(builder: (_) => const HelpPage()));
+  }
+
+  Future<void> _openFeedbackPage(BuildContext context) async {
+    await Navigator.of(
+      context,
+    ).push<void>(MaterialPageRoute<void>(builder: (_) => const FeedbackPage()));
   }
 
   Future<void> _openTicketRecycleBin(BuildContext context) async {
@@ -693,6 +761,42 @@ class _ReminderSettingsCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _SettingsNavigationTile extends StatelessWidget {
+  const _SettingsNavigationTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+    required this.colors,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+  final ColorScheme colors;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: Container(
+        width: 42,
+        height: 42,
+        decoration: BoxDecoration(
+          color: colors.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Icon(icon, color: colors.primary),
+      ),
+      title: Text(title),
+      subtitle: Text(subtitle),
+      trailing: const Icon(Icons.chevron_right_rounded),
+      onTap: onTap,
     );
   }
 }

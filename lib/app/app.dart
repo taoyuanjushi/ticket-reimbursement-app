@@ -3,6 +3,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:ticket_box/app/navigation/app_destination.dart';
 import 'package:ticket_box/app/navigation/app_router.dart';
 import 'package:ticket_box/app/theme/app_theme.dart';
+import 'package:ticket_box/features/onboarding/onboarding_page.dart';
 
 class TicketBoxApp extends StatelessWidget {
   const TicketBoxApp({super.key});
@@ -18,6 +19,9 @@ class TicketBoxApp extends StatelessWidget {
       localizationsDelegates: GlobalMaterialLocalizations.delegates,
       initialRoute: AppRoutes.home,
       onGenerateRoute: AppRouter.onGenerateRoute,
+      builder: (context, child) {
+        return OnboardingGate(child: child ?? const SizedBox.shrink());
+      },
     );
   }
 }

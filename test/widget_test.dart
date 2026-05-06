@@ -2,8 +2,10 @@ import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ticket_box/app/app.dart';
+import 'package:ticket_box/app/app_metadata.dart';
 import 'package:ticket_box/data/local/app_database.dart';
 import 'package:ticket_box/data/providers/database_providers.dart';
 import 'package:ticket_box/features/home/home_page.dart';
@@ -11,8 +13,10 @@ import 'package:ticket_box/features/home/home_providers.dart';
 import 'package:ticket_box/data/repositories/reimbursement_repository.dart';
 import 'package:ticket_box/data/repositories/tag_repository.dart';
 import 'package:ticket_box/data/repositories/ticket_repository.dart';
+import 'package:ticket_box/features/onboarding/onboarding_repository.dart';
 import 'package:ticket_box/features/reimbursements/reimbursement_detail_page.dart';
 import 'package:ticket_box/features/reimbursements/reimbursements_page.dart';
+import 'package:ticket_box/features/settings/feedback_page.dart';
 import 'package:ticket_box/features/settings/local_maintenance_providers.dart';
 import 'package:ticket_box/features/settings/local_maintenance_service.dart';
 import 'package:ticket_box/features/settings/settings_page.dart';
@@ -25,6 +29,17 @@ const _fakeMaintenanceInfo = LocalMaintenanceInfo(
   attachmentDirectoryPath: '/local/ticket_attachments',
   reimbursementExportDirectoryPath: '/local/reimbursement_exports',
   invalidAttachmentCount: 2,
+);
+
+const _fakeDiagnosticInfo = FeedbackDiagnosticInfo(
+  appName: '票据盒',
+  appVersion: '2.0.0+200',
+  platform: 'android test',
+  databasePath: '/local/ticket_box.sqlite',
+  attachmentDirectoryPath: '/local/ticket_attachments',
+  reimbursementExportDirectoryPath: '/local/reimbursement_exports',
+  reimbursementPackageExportDirectoryPath: '/local/reimbursement_packages',
+  backupExportDirectoryPath: '/local/backup_exports',
 );
 
 Finder _settingsScrollable() {
@@ -54,7 +69,48 @@ Finder _homeScrollable() {
       .first;
 }
 
+Finder _feedbackScrollable() {
+  return find
+      .descendant(
+        of: find.byKey(const ValueKey('feedback-page')),
+        matching: find.byType(Scrollable),
+      )
+      .first;
+}
+
 void main() {
+  testWidgets('first launch shows skippable onboarding once', (
+    WidgetTester tester,
+  ) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+
+    final onboardingRepository = OnboardingRepository(database);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          appDatabaseProvider.overrideWithValue(database),
+          localMaintenanceInfoProvider.overrideWith(
+            (ref) async => _fakeMaintenanceInfo,
+          ),
+        ],
+        child: const TicketBoxApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('onboarding-page')), findsOneWidget);
+    expect(find.text('本地整理票据'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('onboarding-skip-button')));
+    await tester.pumpAndSettle();
+
+    expect(await onboardingRepository.isCompleted(), isTrue);
+    expect(find.byKey(const ValueKey('home-page')), findsOneWidget);
+    expect(find.byKey(const ValueKey('onboarding-page')), findsNothing);
+  });
+
   testWidgets('home page shows workbench summary and recent items', (
     WidgetTester tester,
   ) async {
@@ -63,6 +119,7 @@ void main() {
 
     final ticketRepository = TicketRepository(database);
     final reimbursementRepository = ReimbursementRepository(database);
+    await OnboardingRepository(database).markCompleted();
 
     await ticketRepository.createTicket(
       TicketsCompanion.insert(
@@ -172,6 +229,7 @@ void main() {
   ) async {
     final database = AppDatabase(NativeDatabase.memory());
     addTearDown(database.close);
+    await OnboardingRepository(database).markCompleted();
 
     await tester.pumpWidget(
       ProviderScope(
@@ -184,6 +242,7 @@ void main() {
         child: const TicketBoxApp(),
       ),
     );
+    await tester.pumpAndSettle();
 
     expect(find.byKey(const ValueKey('home-page')), findsOneWidget);
 
@@ -201,6 +260,14 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const ValueKey('settings-page')), findsOneWidget);
+    expect(find.text('应用信息'), findsOneWidget);
+    expect(find.text('关于票据盒'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('提醒设置'),
+      300,
+      scrollable: _settingsScrollable(),
+    );
+    await tester.pumpAndSettle();
     expect(find.text('提醒设置'), findsOneWidget);
     await tester.scrollUntilVisible(
       find.text('本地维护'),
@@ -230,6 +297,26 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(find.text('关于票据盒'), findsOneWidget);
+    expect(find.text('版本信息和本地数据说明'), findsOneWidget);
+    expect(find.text('隐私说明'), findsOneWidget);
+    expect(find.text('本地数据、附件和备份说明'), findsOneWidget);
+    expect(find.text('使用帮助'), findsOneWidget);
+    expect(find.text('查看票据、报销和备份流程'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('问题反馈'),
+      300,
+      scrollable: _settingsScrollable(),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('问题反馈'), findsOneWidget);
+    expect(find.text('复制诊断信息，手动反馈问题'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('开启本地提醒'),
+      300,
+      scrollable: _settingsScrollable(),
+    );
+    await tester.pumpAndSettle();
     expect(find.text('开启本地提醒'), findsOneWidget);
     expect(find.text('默认提醒时间'), findsOneWidget);
     await tester.scrollUntilVisible(
@@ -270,6 +357,183 @@ void main() {
     expect(find.text('清空导出 CSV'), findsOneWidget);
     expect(find.text('清理无效附件引用'), findsOneWidget);
     expect(find.text('取消全部待提醒通知'), findsOneWidget);
+  });
+
+  testWidgets('settings page opens about page with release metadata', (
+    WidgetTester tester,
+  ) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          appDatabaseProvider.overrideWithValue(database),
+          localMaintenanceInfoProvider.overrideWith(
+            (ref) async => _fakeMaintenanceInfo,
+          ),
+        ],
+        child: const MaterialApp(home: Scaffold(body: SettingsPage())),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('关于票据盒'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('about-page')), findsOneWidget);
+    expect(find.text(appName), findsOneWidget);
+    expect(
+      tester.widget<Text>(find.byKey(const ValueKey('about-version'))).data,
+      '版本 $appDisplayVersion',
+    );
+    expect(find.text('本地优先'), findsOneWidget);
+    expect(find.text('票据、报销单和附件数据保存在当前设备本地。'), findsOneWidget);
+    expect(find.text('不包含登录、云同步、后台服务或在线票据校验。'), findsOneWidget);
+  });
+
+  testWidgets('settings page opens privacy statement', (
+    WidgetTester tester,
+  ) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          appDatabaseProvider.overrideWithValue(database),
+          localMaintenanceInfoProvider.overrideWith(
+            (ref) async => _fakeMaintenanceInfo,
+          ),
+        ],
+        child: const MaterialApp(home: Scaffold(body: SettingsPage())),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('隐私说明'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('privacy-page')), findsOneWidget);
+    expect(find.text('本地优先的隐私设计'), findsOneWidget);
+    expect(find.text('数据保存在设备上'), findsOneWidget);
+    expect(find.text('无需登录'), findsOneWidget);
+    expect(find.text('附件本地存储'), findsOneWidget);
+    expect(find.text('备份由你手动导出'), findsOneWidget);
+    expect(find.text('卸载前请先备份'), findsOneWidget);
+  });
+
+  testWidgets('settings page opens help page with core flows', (
+    WidgetTester tester,
+  ) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          appDatabaseProvider.overrideWithValue(database),
+          localMaintenanceInfoProvider.overrideWith(
+            (ref) async => _fakeMaintenanceInfo,
+          ),
+        ],
+        child: const MaterialApp(home: Scaffold(body: SettingsPage())),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('使用帮助'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('help-page')), findsOneWidget);
+    expect(find.text('新建票据'), findsOneWidget);
+    expect(find.text('添加图片/PDF附件'), findsOneWidget);
+    expect(find.text('使用图片 OCR 辅助录入'), findsOneWidget);
+    expect(find.text('创建报销单'), findsOneWidget);
+    expect(find.text('关联票据'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('本地备份与恢复'), 300);
+    await tester.pumpAndSettle();
+    expect(find.text('导出 CSV'), findsOneWidget);
+    expect(find.text('导出报销材料包'), findsOneWidget);
+    expect(find.text('本地备份与恢复'), findsOneWidget);
+    expect(find.text('回收站恢复'), findsOneWidget);
+  });
+
+  testWidgets('settings page opens feedback page and copies diagnostics', (
+    WidgetTester tester,
+  ) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+
+    final copiedTexts = <String>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copiedTexts.add(
+            (call.arguments as Map<Object?, Object?>)['text']! as String,
+          );
+        }
+        return null;
+      },
+    );
+    addTearDown(() {
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      );
+    });
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          appDatabaseProvider.overrideWithValue(database),
+          localMaintenanceInfoProvider.overrideWith(
+            (ref) async => _fakeMaintenanceInfo,
+          ),
+          feedbackDiagnosticInfoProvider.overrideWith(
+            (ref) async => _fakeDiagnosticInfo,
+          ),
+        ],
+        child: const MaterialApp(home: Scaffold(body: SettingsPage())),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.text('问题反馈'),
+      300,
+      scrollable: _settingsScrollable(),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('问题反馈'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('feedback-page')), findsOneWidget);
+    expect(find.text('手机型号'), findsOneWidget);
+    expect(find.text('Android 版本'), findsOneWidget);
+    expect(find.text('操作步骤'), findsOneWidget);
+    expect(find.text('实际结果'), findsOneWidget);
+    expect(find.text('截图/录屏（如果方便）'), findsOneWidget);
+    expect(find.textContaining('应用名称：票据盒'), findsOneWidget);
+    expect(
+      find.textContaining('本地数据库路径：/local/ticket_box.sqlite'),
+      findsOneWidget,
+    );
+
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('copy-diagnostic-info-button')),
+      300,
+      scrollable: _feedbackScrollable(),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('copy-diagnostic-info-button')));
+    await tester.pumpAndSettle();
+
+    expect(copiedTexts.single, contains('应用版本：2.0.0+200'));
+    expect(copiedTexts.single, contains('平台：android test'));
+    expect(copiedTexts.single, isNot(contains('标题')));
+    expect(find.text('诊断信息已复制'), findsOneWidget);
   });
 
   testWidgets(

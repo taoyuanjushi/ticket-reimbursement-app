@@ -1,11 +1,15 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:archive/archive.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
+import 'package:ticket_box/app/app_metadata.dart';
 import 'package:ticket_box/data/local/app_database.dart';
 import 'package:ticket_box/features/tickets/ticket_file_service.dart';
 
+const localBackupMetadataFileName = 'metadata.json';
+const localBackupFormatVersion = 1;
 const localBackupDatabaseDirectoryName = 'database';
 const localBackupAttachmentsDirectoryName = 'attachments';
 const localBackupExportsDirectoryName = 'backup_exports';
@@ -54,13 +58,14 @@ class LocalBackupExportService {
     final filePath = path.join(exportDirectory.path, fileName);
 
     final archive = Archive();
+    final databaseEntryPath = path.posix.join(
+      localBackupDatabaseDirectoryName,
+      path.basename(databasePath),
+    );
     await _addFileToArchive(
       archive: archive,
       file: databaseFile,
-      archivePath: path.posix.join(
-        localBackupDatabaseDirectoryName,
-        path.basename(databasePath),
-      ),
+      archivePath: databaseEntryPath,
     );
 
     var attachmentFileCount = 0;
@@ -89,6 +94,22 @@ class LocalBackupExportService {
         attachmentFileCount += 1;
       }
     }
+
+    final metadata = <String, Object>{
+      'appName': appName,
+      'backupFormatVersion': localBackupFormatVersion,
+      'createdAt': DateTime.now().toIso8601String(),
+      'databaseFileEntry': databaseEntryPath,
+      'attachmentFileCount': attachmentFileCount,
+    };
+    final metadataBytes = utf8.encode(jsonEncode(metadata));
+    archive.addFile(
+      ArchiveFile(
+        localBackupMetadataFileName,
+        metadataBytes.length,
+        metadataBytes,
+      ),
+    );
 
     final encodedBytes = ZipEncoder().encode(archive);
     await File(filePath).writeAsBytes(encodedBytes, flush: true);

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:archive/archive.dart';
@@ -187,16 +188,26 @@ class LocalBackupRestoreService {
     String backupFilePath,
   ) {
     ArchiveFile? databaseEntry;
+    ArchiveFile? metadataEntry;
     var attachmentFileCount = 0;
 
     for (final entry in archive.files) {
       final normalizedPath = _normalizeArchivePath(entry.name);
+      if (entry.isSymbolicLink) {
+        throw const LocalBackupValidationException('备份文件结构无效');
+      }
+
       if (entry.isDirectory) {
+        _validateKnownDirectory(normalizedPath);
         continue;
       }
 
-      if (entry.isSymbolicLink) {
-        throw const LocalBackupValidationException('备份文件结构无效');
+      if (normalizedPath == localBackupMetadataFileName) {
+        if (metadataEntry != null) {
+          throw const LocalBackupValidationException('备份元数据无效');
+        }
+        metadataEntry = entry;
+        continue;
       }
 
       if (normalizedPath.startsWith('$localBackupDatabaseDirectoryName/')) {
@@ -217,8 +228,20 @@ class LocalBackupRestoreService {
       );
     }
 
+    if (metadataEntry == null) {
+      throw const LocalBackupValidationException('备份中缺少元数据文件');
+    }
     if (databaseEntry == null) {
       throw const LocalBackupValidationException('备份中缺少数据库文件');
+    }
+
+    final metadata = _parseMetadata(metadataEntry);
+    if (metadata.databaseFileEntry !=
+        _normalizeArchivePath(databaseEntry.name)) {
+      throw const LocalBackupValidationException('备份元数据与数据库文件不匹配');
+    }
+    if (metadata.attachmentFileCount != attachmentFileCount) {
+      throw const LocalBackupValidationException('备份元数据与附件数量不匹配');
     }
 
     return _BackupArchiveContent(
@@ -251,8 +274,8 @@ class LocalBackupRestoreService {
         path.joinAll(path.posix.split(normalizedPath)),
       );
       final normalizedOutputPath = path.normalize(outputPath);
-      if (!path.isWithin(extractRoot.path, normalizedOutputPath) &&
-          normalizedOutputPath != path.normalize(extractRoot.path)) {
+      final normalizedExtractRootPath = path.normalize(extractRoot.path);
+      if (!path.isWithin(normalizedExtractRootPath, normalizedOutputPath)) {
         throw const LocalBackupValidationException('备份文件结构无效');
       }
 
@@ -360,8 +383,55 @@ class LocalBackupRestoreService {
     }
   }
 
+  _BackupMetadata _parseMetadata(ArchiveFile metadataEntry) {
+    try {
+      final decoded = jsonDecode(utf8.decode(metadataEntry.content));
+      if (decoded is! Map<String, Object?>) {
+        throw const FormatException();
+      }
+
+      final version = decoded['backupFormatVersion'];
+      if (version != localBackupFormatVersion) {
+        throw const LocalBackupValidationException('备份格式版本不支持');
+      }
+
+      final databaseFileEntry = decoded['databaseFileEntry'];
+      final attachmentFileCount = decoded['attachmentFileCount'];
+      if (databaseFileEntry is! String || attachmentFileCount is! int) {
+        throw const FormatException();
+      }
+
+      return _BackupMetadata(
+        databaseFileEntry: _normalizeArchivePath(databaseFileEntry),
+        attachmentFileCount: attachmentFileCount,
+      );
+    } on LocalBackupValidationException {
+      rethrow;
+    } catch (_) {
+      throw const LocalBackupValidationException('备份元数据无效');
+    }
+  }
+
+  void _validateKnownDirectory(String normalizedPath) {
+    if (normalizedPath == localBackupDatabaseDirectoryName ||
+        normalizedPath == localBackupAttachmentsDirectoryName ||
+        normalizedPath.startsWith('$localBackupDatabaseDirectoryName/') ||
+        normalizedPath.startsWith('$localBackupAttachmentsDirectoryName/')) {
+      return;
+    }
+
+    throw const LocalBackupValidationException('备份文件结构无效');
+  }
+
   String _normalizeArchivePath(String rawPath) {
-    final normalizedPath = path.posix.normalize(rawPath.replaceAll('\\', '/'));
+    final normalizedRawPath = rawPath.replaceAll('\\', '/');
+    final rawSegments = normalizedRawPath.split('/');
+    if (_looksLikeAbsolutePath(rawPath) ||
+        rawSegments.any((segment) => segment == '..')) {
+      throw const LocalBackupValidationException('备份文件结构无效');
+    }
+
+    final normalizedPath = path.posix.normalize(normalizedRawPath);
     if (normalizedPath == '.' ||
         normalizedPath.isEmpty ||
         normalizedPath == '..' ||
@@ -371,6 +441,12 @@ class LocalBackupRestoreService {
     }
 
     return normalizedPath;
+  }
+
+  bool _looksLikeAbsolutePath(String rawPath) {
+    final normalizedRawPath = rawPath.replaceAll('\\', '/');
+    return path.posix.isAbsolute(normalizedRawPath) ||
+        RegExp(r'^[A-Za-z]:/').hasMatch(normalizedRawPath);
   }
 
   static Future<String?> _defaultBackupFilePicker() async {
@@ -399,6 +475,16 @@ class _BackupArchiveContent {
   });
 
   final ArchiveFile databaseEntry;
+  final int attachmentFileCount;
+}
+
+class _BackupMetadata {
+  const _BackupMetadata({
+    required this.databaseFileEntry,
+    required this.attachmentFileCount,
+  });
+
+  final String databaseFileEntry;
   final int attachmentFileCount;
 }
 
