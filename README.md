@@ -1,17 +1,117 @@
-# ticket_box
+# 票据与报销管理系统
 
-A new Flutter project.
+一个基于 Flutter 构建的本地优先票据与报销管理应用，面向个人、小团队和轻量级报销场景。项目支持票据录入、报销单管理、图片 / PDF 附件导入、本地附件预览、回收站恢复与永久删除等功能。
 
-## Getting Started
+项目采用本地优先设计，默认不依赖登录、云同步、后端服务或 OCR，重点保证数据结构清晰、操作安全、离线可用和后续可扩展。
 
-This project is a starting point for a Flutter application.
+---
 
-A few resources to get you started if this is your first Flutter project:
+## 项目定位
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+本项目主要解决以下问题：
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+- 票据信息分散在相册、PDF、聊天记录和表格中，难以统一管理
+- 报销单和票据之间缺少稳定关联，后期核对成本高
+- 删除、恢复、永久清理等高风险操作缺少明确提示
+- 用户票据、报销记录和附件具有隐私属性，不适合默认上传云端
+- 小型报销工具往往功能过重或依赖外部服务，不适合本地离线使用
+
+本系统的目标是构建一个轻量、可靠、可维护的本地票据与报销管理工具。
+
+---
+
+## 当前核心功能
+
+### 票据管理
+
+- 新增票据
+- 编辑票据
+- 查看票据详情
+- 删除票据
+- 票据分类与金额记录
+- 票据日期记录
+- 票据备注记录
+
+### 报销单管理
+
+- 创建报销单
+- 管理报销单记录
+- 关联票据数据
+- 查看报销单状态
+- 删除报销单
+- 回收站中查看已删除报销单
+
+### 附件导入与预览
+
+当前支持两类附件：
+
+- 图片
+- PDF
+
+附件功能包括：
+
+- 新增票据时选择附件
+- 编辑票据时替换附件
+- 编辑票据时移除附件
+- 票据详情页展示附件信息
+- 图片附件预览
+- PDF 附件查看
+- 删除票据时清理本地附件文件
+
+附件会被复制到应用本地存储目录中，不直接依赖用户选择时的外部原始路径，从而降低原始文件被移动或删除后导致附件失效的风险。
+
+### 回收站
+
+- 查看已删除票据
+- 查看已删除报销单
+- 恢复已删除内容
+- 永久删除已删除内容
+- 空状态提示
+- 永久删除前风险提醒
+- 设置页展示已删除票据数量
+- 设置页展示已删除报销单数量
+
+### 设置页
+
+- 查看系统基础信息
+- 查看回收站数据统计
+- 进入回收站
+- 提供清晰的安全提示和操作说明
+
+---
+
+## 技术栈
+
+- Flutter
+- Dart
+- Drift 本地数据库
+- 本地文件存储
+- Flutter Widget Test
+- Android Release APK 构建
+
+---
+
+## 项目特点
+
+### 1. 本地优先
+
+项目默认不上传用户数据，不依赖账号体系、云服务或后端接口。票据、报销单和附件均保存在本地环境中，适合对隐私要求较高的个人财务、报销和资料归档场景。
+
+### 2. 数据闭环清晰
+
+系统围绕票据、附件、报销单和回收站建立完整数据流：
+
+```text
+新增票据
+  ↓
+可选导入图片 / PDF 附件
+  ↓
+保存票据数据和附件路径
+  ↓
+票据详情页查看
+  ↓
+可编辑、替换、移除附件
+  ↓
+删除后进入回收站
+  ↓
+可恢复或永久删除
